@@ -901,10 +901,21 @@ def predict_with_model(options):
 
     for i, input_audio in enumerate(options['input_audio']):
         print('Go for: {}'.format(input_audio))
+        
+        # Create output subfolder with input audio basename
+        input_basename = os.path.splitext(os.path.basename(input_audio))[0]
+        output_subfolder = os.path.join(output_folder, input_basename)
+        if not os.path.isdir(output_subfolder):
+            os.makedirs(output_subfolder)
+            
+        # Copy input audio to output folder
+        import shutil
+        input_ext = os.path.splitext(input_audio)[1]
+        shutil.copy2(input_audio, os.path.join(output_subfolder, f"input{input_ext}"))
+        
         audio, sr = librosa.load(input_audio, mono=False, sr=44100)
         if len(audio.shape) == 1:
             audio = np.stack([audio, audio], axis=0)
-        
         
         if options['input_gain'] != 0:
             audio = dBgain(audio, options['input_gain'])
@@ -913,26 +924,26 @@ def predict_with_model(options):
         result, sample_rates = model.separate_music_file(audio.T, sr, i, len(options['input_audio']))
         
         for instrum in model.instruments:
-            output_name = os.path.splitext(os.path.basename(input_audio))[0] + '_{}.{}'.format(instrum, output_extension)
+            output_name = f"{instrum}.{output_extension}"
             if options["restore_gain"] is True: #restoring original gain
                 result[instrum] = dBgain(result[instrum], -options['input_gain'])
-            sf.write(output_folder + '/' + output_name, result[instrum], sample_rates[instrum], subtype=output_format)
-            print('File created: {}'.format(output_folder + '/' + output_name))
+            sf.write(os.path.join(output_subfolder, output_name), result[instrum], sample_rates[instrum], subtype=output_format)
+            print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
 
         # Also save the custom separated drums if present
         if 'kick' in result:
-            output_name = os.path.splitext(os.path.basename(input_audio))[0] + '_{}.{}'.format('kick', output_extension)
+            output_name = f"kick.{output_extension}"
             if options["restore_gain"] is True:
                 result['kick'] = dBgain(result['kick'], -options['input_gain'])
-            sf.write(output_folder + '/' + output_name, result['kick'], sr, subtype=output_format)
-            print('File created: {}'.format(output_folder + '/' + output_name))
+            sf.write(os.path.join(output_subfolder, output_name), result['kick'], sr, subtype=output_format)
+            print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
         
         if 'hihat' in result:
-            output_name = os.path.splitext(os.path.basename(input_audio))[0] + '_{}.{}'.format('hihat', output_extension)
+            output_name = f"hihat.{output_extension}"
             if options["restore_gain"] is True:
                 result['hihat'] = dBgain(result['hihat'], -options['input_gain'])
-            sf.write(output_folder + '/' + output_name, result['hihat'], sr, subtype=output_format)
-            print('File created: {}'.format(output_folder + '/' + output_name))
+            sf.write(os.path.join(output_subfolder, output_name), result['hihat'], sr, subtype=output_format)
+            print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
 
         # instrumental part 1
         # inst = (audio.T - result['vocals'])
@@ -941,16 +952,16 @@ def predict_with_model(options):
         if options["restore_gain"] is True: #restoring original gain
             inst = dBgain(inst, -options['input_gain'])
 
-        output_name = os.path.splitext(os.path.basename(input_audio))[0] + '_{}.{}'.format('instrum', output_extension)
-        sf.write(output_folder + '/' + output_name, inst, sr, subtype=output_format)
-        print('File created: {}'.format(output_folder + '/' + output_name))
+        output_name = f"instrum.{output_extension}"
+        sf.write(os.path.join(output_subfolder, output_name), inst, sr, subtype=output_format)
+        print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
         
         if options['vocals_only'] is False and options['instrumental_version'] is True:
             # Generate combined instrumental version (bass + drums + other)
             inst2 = (result['bass'] + result['drums'] + result['other'])
-            output_name = os.path.splitext(os.path.basename(input_audio))[0] + '_{}.{}'.format('Instrumental', output_extension)
-            sf.write(output_folder + '/' + output_name, inst2, sr, subtype=output_format)
-            print('File created: {}'.format(output_folder + '/' + output_name))
+            output_name = f"instrumental.{output_extension}"
+            sf.write(os.path.join(output_subfolder, output_name), inst2, sr, subtype=output_format)
+            print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
 
 
 # Linkwitz-Riley filter
@@ -976,7 +987,6 @@ def dBgain(audio, volume_gain_dB):
     attenuation = 10 ** (volume_gain_dB / 20)
     gained_audio = audio * attenuation 
     return gained_audio
-
 
 ## Main function
 
