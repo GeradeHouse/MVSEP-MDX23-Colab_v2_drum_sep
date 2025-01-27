@@ -58,14 +58,12 @@ class Attend(nn.Module):
         if not torch.cuda.is_available() or not flash:
             return
 
+        # get device properties, but do not hard-code for A100 anymore
         device_properties = torch.cuda.get_device_properties(torch.device('cuda'))
 
-        if device_properties.major == 8 and device_properties.minor == 0:
-            print_once('A100 GPU detected, using flash attention if input tensor is on cuda')
-            self.cuda_config = FlashAttentionConfig(True, False, False)
-        else:
-            print_once('Non-A100 GPU detected, using math or mem efficient attention if input tensor is on cuda')
-            self.cuda_config = FlashAttentionConfig(False, True, True)
+        # automatically allow PyTorch 2.0 to pick the best kernel (flash, mem_efficient, math) on GPU
+        print_once('Automatic kernel selection for PyTorch 2.0: enabling flash, math, and mem-efficient attention if input tensor is on cuda')
+        self.cuda_config = FlashAttentionConfig(True, True, True)
 
     def flash_attn(self, q, k, v):
         _, heads, q_len, _, k_len, is_cuda, device = *q.shape, k.shape[-2], q.is_cuda, q.device
