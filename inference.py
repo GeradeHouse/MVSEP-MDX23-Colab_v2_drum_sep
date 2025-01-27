@@ -11,7 +11,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import inspect
-from tqdm.notebook import tqdm
+from tqdm.auto import tqdm
 import numpy as np
 import torch
 import torch.nn as nn

@@ -5,6 +5,7 @@ tqdm
 librosa
 demucs
 onnxruntime-gpu
+nvidia-cudnn-cu12
 torch
 pyyaml
 ml_collections
