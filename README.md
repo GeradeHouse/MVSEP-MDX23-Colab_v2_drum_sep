@@ -1,10 +1,3 @@
-<<<<<<< HEAD
-=======
-Below is a **recommended updated README** that includes all previous information **plus** details about the new custom drum model (splitting “drums” into “kick” and “hihat”) for 5-stem DJ usage. Feel free to adjust version numbers or dates as you see fit!
-
----
-
->>>>>>> d2ccf08dda94c6b14f7a3ab530f6b7042e228018
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/O5O119O0KM) 
 # MVSep-MDX23 Colab Fork v2.5
 
