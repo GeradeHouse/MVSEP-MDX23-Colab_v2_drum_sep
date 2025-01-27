@@ -884,6 +884,8 @@ class EnsembleDemucsMDXMusicSeparationModel:
         separated_music_arrays['instrum'] = instrum
 
         return separated_music_arrays, output_sample_rates
+    
+
 def predict_with_model(options):
 
     output_format = options['output_format']
