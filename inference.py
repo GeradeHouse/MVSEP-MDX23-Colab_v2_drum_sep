@@ -970,7 +970,6 @@ def predict_with_model(options):
             print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
 
 
-
 # Linkwitz-Riley filter
 def lr_filter(audio, cutoff, filter_type, order=6, sr=44100):
     audio = audio.T
