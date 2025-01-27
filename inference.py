@@ -386,6 +386,7 @@ class EnsembleDemucsMDXMusicSeparationModel:
         self.single_onnx = options.get('single_onnx', False)
         self.overlap_demucs = min(max(float(options['overlap_demucs']), 0.0), 0.99)
         self.overlap_MDX = min(max(float(options['overlap_VOCFT']), 0.0), 0.99)
+        self.shifts_drum = options.get('shifts_drum', 1)  # Number of shifts for custom drum separation
         
         # Model folder
         self.model_folder = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'models')
@@ -822,19 +823,20 @@ class EnsembleDemucsMDXMusicSeparationModel:
                         print(f"  - Error: Error getting segment size for custom_drum_model: {e}")
                         traceback.print_exc()
                         raise
-
-                    stride = int((1 - overlap_custom) * segment_size)
+                    
+                    # Calculate the stride based on the segment size and overlap usefull for calculating the total of updates for a tqdm progress bar
+                    # stride = int((1 - overlap_custom) * segment_size) 
 
                     # Prepare the drums track
                     drums_audio = separated_music_arrays["drums"]
                     drums_audio = np.expand_dims(drums_audio.T, axis=0)
                     drums_audio_torch = torch.from_numpy(drums_audio).float().to(self.device)
 
-                    # Mirror-flip trick with 4x shifts forward, 4x shifts inverted
+                    # Mirror-flip trick using configurable number of shifts for both forward and inverted passes
                     out_regular = apply_model(
                         custom_drum_model,
                         drums_audio_torch,
-                        shifts=self.shifts * 4,  # Forward pass
+                        shifts=self.shifts_drum,  # Number of shifts for forward pass
                         split=True,
                         overlap=overlap_custom
                     )[0].cpu().numpy()
@@ -842,7 +844,7 @@ class EnsembleDemucsMDXMusicSeparationModel:
                     out_inverted = -apply_model(
                         custom_drum_model,
                         -drums_audio_torch,
-                        shifts=self.shifts * 4,  # Inverted pass
+                        shifts=self.shifts_drum,  # Number of shifts for inverted pass
                         split=True,
                         overlap=overlap_custom
                     )[0].cpu().numpy()
@@ -943,10 +945,10 @@ def predict_with_model(options):
         sf.write(output_folder + '/' + output_name, inst, sr, subtype=output_format)
         print('File created: {}'.format(output_folder + '/' + output_name))
         
-        if options['vocals_only'] is False:
-            # instrumental part 2
+        if options['vocals_only'] is False and options['instrumental_version'] is True:
+            # Generate combined instrumental version (bass + drums + other)
             inst2 = (result['bass'] + result['drums'] + result['other'])
-            output_name = os.path.splitext(os.path.basename(input_audio))[0] + '_{}.{}'.format('instrum2', output_extension)
+            output_name = os.path.splitext(os.path.basename(input_audio))[0] + '_{}.{}'.format('Instrumental', output_extension)
             sf.write(output_folder + '/' + output_name, inst2, sr, subtype=output_format)
             print('File created: {}'.format(output_folder + '/' + output_name))
 
@@ -976,7 +978,7 @@ def dBgain(audio, volume_gain_dB):
     return gained_audio
 
 
-
+## Main function
 
 if __name__ == '__main__':
     start_time = time()
@@ -1012,6 +1014,8 @@ if __name__ == '__main__':
     m.add_argument("--output_format", type=str, help="Output audio folder", default="PCM_16")
     m.add_argument("--input_gain", type=int, help="input volume gain", required=False, default=0)
     m.add_argument("--restore_gain", action='store_true', help="restore original gain after separation")
+    m.add_argument("--shifts_drum", type=int, help="Number of shifts to use in custom drum separation (higher values can improve quality at the cost of processing time)", default=1)
+    m.add_argument("--instrumental_version", action='store_true', help="Generate the instrumental version (combined bass+drums+other)", default=True)
     m.add_argument("--filter_vocals", action='store_true', help="Remove audio below 50hz in vocals stem")
     options = m.parse_args().__dict__
     print("Options: ")
