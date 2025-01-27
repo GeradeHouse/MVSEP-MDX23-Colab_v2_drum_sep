@@ -864,6 +864,10 @@ class EnsembleDemucsMDXMusicSeparationModel:
                         separated_music_arrays["hihat"] = hihat
                         output_sample_rates["kick"]  = sample_rate
                         output_sample_rates["hihat"] = sample_rate
+                        # Remove drums stem since we have kick and hihat
+                        if 'drums' in separated_music_arrays:
+                            del separated_music_arrays['drums']
+                            del output_sample_rates['drums']
                     else:
                         print("Custom drum model does not have 2 sources or missing 'platillos', skipping kick/hihat assignment.")
                 else:
@@ -922,28 +926,41 @@ def predict_with_model(options):
 
         print("Input audio: {} Sample rate: {}".format(audio.shape, sr))
         result, sample_rates = model.separate_music_file(audio.T, sr, i, len(options['input_audio']))
-        
-        for instrum in model.instruments:
-            output_name = f"{instrum}.{output_extension}"
-            if options["restore_gain"] is True: #restoring original gain
-                result[instrum] = dBgain(result[instrum], -options['input_gain'])
-            sf.write(os.path.join(output_subfolder, output_name), result[instrum], sample_rates[instrum], subtype=output_format)
-            print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
 
-        # Also save the custom separated drums if present
-        if 'kick' in result:
-            output_name = f"kick.{output_extension}"
-            if options["restore_gain"] is True:
-                result['kick'] = dBgain(result['kick'], -options['input_gain'])
-            sf.write(os.path.join(output_subfolder, output_name), result['kick'], sr, subtype=output_format)
-            print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
+        # Write kick and hihat stems if they exist
+        for stem in ['kick', 'hihat']:
+            if stem in result:
+                output_name = f"{stem}.{output_extension}"
+                if options["restore_gain"] is True:
+                    result[stem] = dBgain(result[stem], -options['input_gain'])
+                sf.write(os.path.join(output_subfolder, output_name), result[stem], sr, subtype=output_format)
+                print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
         
-        if 'hihat' in result:
-            output_name = f"hihat.{output_extension}"
-            if options["restore_gain"] is True:
-                result['hihat'] = dBgain(result['hihat'], -options['input_gain'])
-            sf.write(os.path.join(output_subfolder, output_name), result['hihat'], sr, subtype=output_format)
-            print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
+        # First try to write kick and hihat stems
+        has_both_drum_stems = True
+        for stem in ['kick', 'hihat']:
+            if stem in result:
+                output_name = f"{stem}.{output_extension}"
+                if options["restore_gain"] is True:
+                    result[stem] = dBgain(result[stem], -options['input_gain'])
+                sf.write(os.path.join(output_subfolder, output_name), result[stem], sr, subtype=output_format)
+                print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
+            else:
+                has_both_drum_stems = False
+
+        # Write remaining stems based on kick/hihat success
+        stems_to_write = ['bass', 'vocals', 'other']
+        if not has_both_drum_stems:
+            stems_to_write.append('drums')
+            
+        for instrum in stems_to_write:
+            if instrum in result:  # Only write stems that exist in result
+                output_name = f"{instrum}.{output_extension}"
+                if options["restore_gain"] is True: #restoring original gain
+                    result[instrum] = dBgain(result[instrum], -options['input_gain'])
+                sf.write(os.path.join(output_subfolder, output_name), result[instrum], sample_rates[instrum], subtype=output_format)
+                print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
+
 
         # instrumental part 1
         # inst = (audio.T - result['vocals'])
