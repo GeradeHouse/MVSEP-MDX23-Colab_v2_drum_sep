@@ -352,6 +352,8 @@ def demix(mix, device, models, infer_session, overlap=0.2):
     source = tar_waves[:,0:None]
 
     return source
+
+
 class EnsembleDemucsMDXMusicSeparationModel:
     """
     Doesn't do any separation just passes the input back as output
@@ -711,7 +713,7 @@ class EnsembleDemucsMDXMusicSeparationModel:
             model.to(self.device)
             out = apply_model(model, audio, shifts=shifts, overlap=overlap)[0].cpu().numpy()
        
-            # More stems need to add
+            # Summing the extra stems into the 'other' stem
             out[2] = out[2] + out[4] + out[5]
             out = out[:4]
             out[0] = self.weights_drums[i] * out[0]
@@ -737,6 +739,8 @@ class EnsembleDemucsMDXMusicSeparationModel:
             model = model.cpu()
             del model
             gc.collect()
+
+            # Aggregate the results from each Demucs variant
             out = np.array(all_outs).sum(axis=0)
             out[0] = out[0] / self.weights_drums.sum()
             out[1] = out[1] / self.weights_bass.sum()
@@ -765,9 +769,91 @@ class EnsembleDemucsMDXMusicSeparationModel:
             drums = separated_music_arrays['drums']
             other = separated_music_arrays['other']
     
+            # Re-solve final combos to keep them consistent
             separated_music_arrays['other'] = mixed_sound_array - vocals - bass - drums
             separated_music_arrays['drums'] = mixed_sound_array - vocals - bass - other
-            separated_music_arrays['bass'] = mixed_sound_array - vocals - drums - other
+            separated_music_arrays['bass']  = mixed_sound_array - vocals - drums - other
+
+            # -----------------------------------------------------------------
+            # Additional separation of drums into kick and hihat using the custom model
+            try:
+                import os
+                import traceback
+                custom_model_path = "/content/MVSEP-MDX23-Colab_v2/models/modelo_final.th"
+                if os.path.isfile(custom_model_path):
+                    print("Performing custom drum separation into kick and hihat.")
+                    checkpoint = torch.load(custom_model_path, map_location=self.device)
+                    ModelClass = checkpoint["klass"]
+                    model_args = checkpoint["args"]
+                    model_kwargs = checkpoint["kwargs"]
+                    custom_drum_model = ModelClass(*model_args, **model_kwargs)
+                    custom_drum_model.load_state_dict(checkpoint["state"])
+                    custom_drum_model.eval()
+                    custom_drum_model.to(self.device)
+
+                    # If the model doesn't have a .sources attribute, define a default
+                    if not hasattr(custom_drum_model, "sources"):
+                        # For example, if your model uses "kick" and "platillos" as sources:
+                        custom_drum_model.sources = ["kick", "platillos"]
+
+                    # Use the same overlap logic or a custom overlap, e.g. 0.25
+                    overlap_custom = 0.25
+                    two_stems = "platillos"
+
+                    # Attempt to retrieve samplerate & segment from the model
+                    try:
+                        segment_size = int(custom_drum_model.samplerate * custom_drum_model.segment)
+                    except Exception as e:
+                        print(f"  - Error: Error getting segment size for custom_drum_model: {e}")
+                        traceback.print_exc()
+                        raise
+
+                    stride = int((1 - overlap_custom) * segment_size)
+
+                    # Prepare the drums track
+                    drums_audio = separated_music_arrays["drums"]
+                    drums_audio = np.expand_dims(drums_audio.T, axis=0)
+                    drums_audio_torch = torch.from_numpy(drums_audio).float().to(self.device)
+
+                    # Mirror-flip trick with 4x shifts forward, 4x shifts inverted
+                    out_regular = apply_model(
+                        custom_drum_model,
+                        drums_audio_torch,
+                        shifts=self.shifts * 4,  # Forward pass
+                        split=True,
+                        overlap=overlap_custom
+                    )[0].cpu().numpy()
+                    
+                    out_inverted = -apply_model(
+                        custom_drum_model,
+                        -drums_audio_torch,
+                        shifts=self.shifts * 4,  # Inverted pass
+                        split=True,
+                        overlap=overlap_custom
+                    )[0].cpu().numpy()
+
+                    # Merge them
+                    sources_drum = 0.5 * out_regular + 0.5 * out_inverted
+
+                    # If your custom model has exactly 2 sources, e.g. ["kick", "platillos"]
+                    if len(custom_drum_model.sources) == 2 and two_stems in custom_drum_model.sources:
+                        # Extract 'hihat' from the index of `two_stems`
+                        hihat_idx = custom_drum_model.sources.index(two_stems)
+                        hihat = sources_drum[hihat_idx].T
+                        # Kick is the total minus the hihat track
+                        kick = (sources_drum.sum(axis=0) - sources_drum[hihat_idx]).T
+
+                        separated_music_arrays["kick"]  = kick
+                        separated_music_arrays["hihat"] = hihat
+                        output_sample_rates["kick"]  = sample_rate
+                        output_sample_rates["hihat"] = sample_rate
+                    else:
+                        print("Custom drum model does not have 2 sources or missing 'platillos', skipping kick/hihat assignment.")
+                else:
+                    print(f"Custom drum model file not found at {custom_model_path}. Skipping drum separation.")
+            except Exception as e:
+                print(f"Error separating drums into kick/hihat: {e}")
+            # -----------------------------------------------------------------
 
         # vocals
         separated_music_arrays['vocals'] = vocals
@@ -816,6 +902,21 @@ def predict_with_model(options):
             sf.write(output_folder + '/' + output_name, result[instrum], sample_rates[instrum], subtype=output_format)
             print('File created: {}'.format(output_folder + '/' + output_name))
 
+        # Also save the custom separated drums if present
+        if 'kick' in result:
+            output_name = os.path.splitext(os.path.basename(input_audio))[0] + '_{}.{}'.format('kick', output_extension)
+            if options["restore_gain"] is True:
+                result['kick'] = dBgain(result['kick'], -options['input_gain'])
+            sf.write(output_folder + '/' + output_name, result['kick'], sr, subtype=output_format)
+            print('File created: {}'.format(output_folder + '/' + output_name))
+        
+        if 'hihat' in result:
+            output_name = os.path.splitext(os.path.basename(input_audio))[0] + '_{}.{}'.format('hihat', output_extension)
+            if options["restore_gain"] is True:
+                result['hihat'] = dBgain(result['hihat'], -options['input_gain'])
+            sf.write(output_folder + '/' + output_name, result['hihat'], sr, subtype=output_format)
+            print('File created: {}'.format(output_folder + '/' + output_name))
+
         # instrumental part 1
         # inst = (audio.T - result['vocals'])
         inst = result['instrum']
@@ -845,6 +946,7 @@ def lr_filter(audio, cutoff, filter_type, order=6, sr=44100):
     filtered_audio = signal.sosfiltfilt(sos, audio)
     return filtered_audio.T
 
+
 def match_array_shapes(array_1:np.ndarray, array_2:np.ndarray):
     if array_1.shape[1] > array_2.shape[1]:
         array_1 = array_1[:,:array_2.shape[1]] 
@@ -857,6 +959,7 @@ def dBgain(audio, volume_gain_dB):
     attenuation = 10 ** (volume_gain_dB / 20)
     gained_audio = audio * attenuation 
     return gained_audio
+
 
 
 
@@ -928,4 +1031,3 @@ if __name__ == '__main__':
     print(f'output_format: {options["output_format"]}\n')
     predict_with_model(options)
     print('Time: {:.0f} sec'.format(time() - start_time))
-
