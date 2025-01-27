@@ -11,7 +11,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import inspect
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 import numpy as np
 import torch
 import torch.nn as nn
@@ -67,6 +67,20 @@ def get_models(name, device, load=True, vocals_model_type=0):
 def get_model_from_config(model_type, config_path):
     with open(config_path) as f:
         config = ConfigDict(yaml.load(f, Loader=yaml.FullLoader))
+
+        # --- BEGIN NEW CORRUPTION-HANDLING CODE ---
+        # Attempt to infer a matching checkpoint path from the .yaml name
+        ckpt_path = config_path.replace('.yaml', '.ckpt')
+        if os.path.isfile(ckpt_path):
+            try:
+                # Attempt to read a small portion of the .ckpt to detect corruption
+                _ = torch.load(ckpt_path, map_location='cpu')
+            except Exception as e:
+                print(f"\nCorrupted checkpoint detected: {ckpt_path}")
+                print(f"Removing file and will allow re-download. Error detail:\n{e}")
+                os.remove(ckpt_path)
+        # --- END NEW CORRUPTION-HANDLING CODE ---
+
         if model_type == 'mdx23c':
             # from modules.tfc_tdf_v3 import TFC_TDF_net
             model = TFC_TDF_net(config)
@@ -87,6 +101,7 @@ def get_model_from_config(model_type, config_path):
             print('Unknown model: {}'.format(model_type))
             model = None
     return model, config
+
 
 
 def demix_new(model, mix, device, config, dim_t=256):
