@@ -215,7 +215,7 @@ def get_model_from_config(model_type, config_path):
 
 def demix_new(model, mix, device, config, dim_t=256, batch_size=4):  # Default to 4 for safety
     mix = torch.tensor(mix)
-    N = options["overlap_'BSRoformer'"]
+    N = options["overlap_BSRoformer"]
     mdx_window_size = dim_t
     C = config.audio.hop_length * (mdx_window_size - 1)
     fade_size = C // 100
