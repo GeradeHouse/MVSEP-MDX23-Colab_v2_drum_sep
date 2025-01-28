@@ -47,45 +47,52 @@ if __name__ == '__main__':
 
     # === Change Directory and Create Correct Symbolic Links ===
     try:
-        # Change to /usr/lib64-nvidia to create symbolic links
-        os.chdir('/usr/lib64-nvidia/')
+        # Create lib directory if it doesn't exist
+        lib_dir = '/usr/lib64-nvidia'
+        os.makedirs(lib_dir, exist_ok=True)
+        print(f"Created directory: {lib_dir}")
+        
+        # Change to the lib directory
+        os.chdir(lib_dir)
+        
+        # Get path to cudnn installation in virtual environment
+        import site
+        site_packages = site.getsitepackages()[0]
+        cudnn_lib_path = os.path.join(site_packages, 'nvidia/cudnn/lib')
         
         # Remove existing symlinks if they exist
         libs = ['libcudnn.so', 'libcudnn_adv.so', 'libcudnn_cnn.so', 'libcudnn_ops.so']
         for lib in libs:
-            subprocess.run(['sudo', 'rm', '-f', lib], check=True)
-            print(f"Removed existing symlink: {lib}")
+            if os.path.exists(lib):
+                os.remove(lib)
+                print(f"Removed existing symlink: {lib}")
         
         # Create symbolic links pointing directly to the actual .so.9 files
-        subprocess.run([
-            'sudo', 'ln', '-sf', 
-            '/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib/libcudnn.so.9', 
+        os.symlink(
+            os.path.join(cudnn_lib_path, 'libcudnn.so.9'),
             'libcudnn.so.9'
-        ], check=True)
-        subprocess.run([
-            'sudo', 'ln', '-sf', 
-            '/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib/libcudnn_adv.so.9', 
+        )
+        os.symlink(
+            os.path.join(cudnn_lib_path, 'libcudnn_adv.so.9'),
             'libcudnn_adv.so.9'
-        ], check=True)
-        subprocess.run([
-            'sudo', 'ln', '-sf', 
-            '/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib/libcudnn_cnn.so.9', 
+        )
+        os.symlink(
+            os.path.join(cudnn_lib_path, 'libcudnn_cnn.so.9'),
             'libcudnn_cnn.so.9'
-        ], check=True)
-        subprocess.run([
-            'sudo', 'ln', '-sf', 
-            '/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib/libcudnn_ops.so.9', 
+        )
+        os.symlink(
+            os.path.join(cudnn_lib_path, 'libcudnn_ops.so.9'),
             'libcudnn_ops.so.9'
-        ], check=True)
+        )
         
-        # Create unversioned symlinks if necessary
-        subprocess.run(['sudo', 'ln', '-sf', 'libcudnn.so.9', 'libcudnn.so'], check=True)
-        subprocess.run(['sudo', 'ln', '-sf', 'libcudnn_adv.so.9', 'libcudnn_adv.so'], check=True)
-        subprocess.run(['sudo', 'ln', '-sf', 'libcudnn_cnn.so.9', 'libcudnn_cnn.so'], check=True)
-        subprocess.run(['sudo', 'ln', '-sf', 'libcudnn_ops.so.9', 'libcudnn_ops.so'], check=True)
+        # Create unversioned symlinks
+        os.symlink('libcudnn.so.9', 'libcudnn.so')
+        os.symlink('libcudnn_adv.so.9', 'libcudnn_adv.so')
+        os.symlink('libcudnn_cnn.so.9', 'libcudnn_cnn.so')
+        os.symlink('libcudnn_ops.so.9', 'libcudnn_ops.so')
         
         # Update the linker cache
-        subprocess.run(['sudo', 'ldconfig'], check=True)
+        subprocess.run(['ldconfig'], check=True)
         
         print("Symbolic links created and linker cache updated successfully.")
 
