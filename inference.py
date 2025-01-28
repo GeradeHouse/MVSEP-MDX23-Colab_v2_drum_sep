@@ -654,7 +654,7 @@ class EnsembleDemucsMDXMusicSeparationModel:
                 if model_name == "BSRoformer":
                     print(f'Processing vocals with {model_name} model...')
                     # Use larger window size for faster processing while maintaining quality (dim_t) original is 1101
-                    sources_bs = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_bsrofo, self.config_bsrofo, dim_t=2048, bigshifts=options["BigShifts"], batch_size=16)  # BSRoformer with batch_size=16
+                    sources_bs = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_bsrofo, self.config_bsrofo, dim_t=2048, bigshifts=options["BigShifts"], batch_size=8)  # BSRoformer with batch_size=8
                     vocals_bs = match_array_shapes(sources_bs, mixed_sound_array.T)
                     vocals_model_outputs.append(vocals_bs)
                     if not options['large_gpu']:
