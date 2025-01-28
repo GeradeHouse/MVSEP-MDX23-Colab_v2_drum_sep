@@ -1,3 +1,5 @@
 .lh
 .history
 inference-old.py
+.venv
+nohup.out
