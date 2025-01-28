@@ -15,35 +15,10 @@ if __name__ == '__main__':
     from time import time
     # ... (other imports)
 
-    # === Debug lines to see environment variables and library contents ===
-    print("\n--- Debug environment from sub-process ---")
-
-    print("Checking if libcudnn.so.9 and related files exist in /usr/lib64-nvidia/:")
-    try:
-        output = subprocess.check_output(['ls', '-lh', '/usr/lib64-nvidia/'], text=True)
-        print(output)
-    except subprocess.CalledProcessError as e:
-        print(f"Error listing /usr/lib64-nvidia/: {e}")
-
-    # Print LD_LIBRARY_PATH
-    print("\nLD_LIBRARY_PATH:")
-    ld_library_path = os.environ.get('LD_LIBRARY_PATH', 'Not set')
-    print(ld_library_path)
-
-    # List contents of directories in LD_LIBRARY_PATH
-    if ld_library_path and ld_library_path != 'Not set':
-        print("\nListing contents of LD_LIBRARY_PATH directories:")
-        for path in ld_library_path.split(':'):
-            print(f"\nContents of {path}:")
-            try:
-                output = subprocess.check_output(['ls', '-lh', path], text=True)
-                print(output)
-            except subprocess.CalledProcessError as e:
-                print(f"Error listing {path}: {e}")
-    else:
-        print("\nLD_LIBRARY_PATH is not set.")
-
-    print("--- End of debug info ---\n")
+    # Create NVIDIA library directories
+    nvidia_dirs = ['/usr/local/nvidia/lib', '/usr/local/nvidia/lib64', '/usr/lib64-nvidia']
+    for dir_path in nvidia_dirs:
+        os.makedirs(dir_path, exist_ok=True)
 
     # === Change Directory and Create Correct Symbolic Links ===
     try:
@@ -60,36 +35,48 @@ if __name__ == '__main__':
         site_packages = site.getsitepackages()[0]
         cudnn_lib_path = os.path.join(site_packages, 'nvidia/cudnn/lib')
         
-        # Remove existing symlinks if they exist
-        libs = ['libcudnn.so', 'libcudnn_adv.so', 'libcudnn_cnn.so', 'libcudnn_ops.so']
+        # Remove all existing symlinks
+        libs = [
+            'libcudnn.so', 'libcudnn.so.9',
+            'libcudnn_adv.so', 'libcudnn_adv.so.9',
+            'libcudnn_cnn.so', 'libcudnn_cnn.so.9',
+            'libcudnn_ops.so', 'libcudnn_ops.so.9'
+        ]
         for lib in libs:
-            if os.path.exists(lib):
+            if os.path.exists(lib) or os.path.islink(lib):
                 os.remove(lib)
                 print(f"Removed existing symlink: {lib}")
         
         # Create symbolic links pointing directly to the actual .so.9 files
-        os.symlink(
-            os.path.join(cudnn_lib_path, 'libcudnn.so.9'),
-            'libcudnn.so.9'
-        )
-        os.symlink(
-            os.path.join(cudnn_lib_path, 'libcudnn_adv.so.9'),
-            'libcudnn_adv.so.9'
-        )
-        os.symlink(
-            os.path.join(cudnn_lib_path, 'libcudnn_cnn.so.9'),
-            'libcudnn_cnn.so.9'
-        )
-        os.symlink(
-            os.path.join(cudnn_lib_path, 'libcudnn_ops.so.9'),
-            'libcudnn_ops.so.9'
-        )
+        symlinks = {
+            'libcudnn.so.9': os.path.join(cudnn_lib_path, 'libcudnn.so.9'),
+            'libcudnn_adv.so.9': os.path.join(cudnn_lib_path, 'libcudnn_adv.so.9'),
+            'libcudnn_cnn.so.9': os.path.join(cudnn_lib_path, 'libcudnn_cnn.so.9'),
+            'libcudnn_ops.so.9': os.path.join(cudnn_lib_path, 'libcudnn_ops.so.9')
+        }
+        
+        # Create versioned symlinks
+        for link_name, target in symlinks.items():
+            try:
+                os.symlink(target, link_name)
+                print(f"Created symlink: {link_name} -> {target}")
+            except OSError as e:
+                print(f"Error creating symlink {link_name}: {e}")
         
         # Create unversioned symlinks
-        os.symlink('libcudnn.so.9', 'libcudnn.so')
-        os.symlink('libcudnn_adv.so.9', 'libcudnn_adv.so')
-        os.symlink('libcudnn_cnn.so.9', 'libcudnn_cnn.so')
-        os.symlink('libcudnn_ops.so.9', 'libcudnn_ops.so')
+        unversioned = {
+            'libcudnn.so': 'libcudnn.so.9',
+            'libcudnn_adv.so': 'libcudnn_adv.so.9',
+            'libcudnn_cnn.so': 'libcudnn_cnn.so.9',
+            'libcudnn_ops.so': 'libcudnn_ops.so.9'
+        }
+        
+        for link_name, target in unversioned.items():
+            try:
+                os.symlink(target, link_name)
+                print(f"Created symlink: {link_name} -> {target}")
+            except OSError as e:
+                print(f"Error creating symlink {link_name}: {e}")
         
         # Update the linker cache
         subprocess.run(['ldconfig'], check=True)
@@ -101,23 +88,44 @@ if __name__ == '__main__':
 
     finally:
         # Change back to the original working directory
-        os.chdir('/content/MVSEP-MDX23-Colab_v2')
+        os.chdir('/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2')
 
     # Confirm the current working directory
     print(f"Current working directory: {os.getcwd()}")
 
     # === Update LD_LIBRARY_PATH ===
-    cudnn_lib_path = '/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib/'
+    import site
+    site_packages = site.getsitepackages()[0]
+    cudnn_lib_path = os.path.join(site_packages, 'nvidia/cudnn/lib')
     os.environ['LD_LIBRARY_PATH'] = f"{cudnn_lib_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
 
     # Update the linker cache again to recognize the new LD_LIBRARY_PATH
     try:
-        subprocess.run(['sudo', 'ldconfig'], check=True)
+        subprocess.run(['ldconfig'], check=True)
         print("Linker cache updated after modifying LD_LIBRARY_PATH.")
     except subprocess.CalledProcessError as e:
         print(f"An error occurred while updating linker cache: {e}")
 
-    # Continue with the rest of your script
+    # Update LD_LIBRARY_PATH with all NVIDIA paths
+    nvidia_paths = [
+        os.path.join(site.getsitepackages()[0], 'nvidia/cudnn/lib'),
+        '/usr/local/nvidia/lib',
+        '/usr/local/nvidia/lib64',
+        '/usr/lib64-nvidia'
+    ]
+    
+    # Filter out non-existent paths
+    nvidia_paths = [path for path in nvidia_paths if os.path.exists(path)]
+    
+    # Update LD_LIBRARY_PATH
+    current_ld_path = os.environ.get('LD_LIBRARY_PATH', '')
+    new_ld_paths = ':'.join(nvidia_paths)
+    if current_ld_path:
+        os.environ['LD_LIBRARY_PATH'] = f"{new_ld_paths}:{current_ld_path}"
+    else:
+        os.environ['LD_LIBRARY_PATH'] = new_ld_paths
+
+    # Continue with GPU setup
     gpu_use = "0"
     print('GPU use: {}'.format(gpu_use))
     os.environ["CUDA_VISIBLE_DEVICES"] = "{}".format(gpu_use)
@@ -127,7 +135,7 @@ if __name__ == '__main__':
 
 
 import inspect
-from tqdm.auto import tqdm
+from tqdm.notebook import tqdm
 import numpy as np
 import torch
 import torch.nn as nn
@@ -525,10 +533,56 @@ class EnsembleDemucsMDXMusicSeparationModel:
                 model.to(self.device)
                 self.models.append(model)
 
-    def download_file_if_not_exists(self, remote_url, local_path):
-        """Downloads a file from a URL if it does not already exist."""
-        if not os.path.isfile(local_path):
-            torch.hub.download_url_to_file(remote_url, local_path)
+    def verify_file(self, file_path):
+        """Verify if a PyTorch checkpoint file is valid."""
+        try:
+            _ = torch.load(file_path, map_location='cpu')
+            return True
+        except Exception as e:
+            print(f"\nCorrupted file detected: {file_path}")
+            print(f"Error detail: {e}")
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            return False
+
+    def download_file_if_not_exists(self, remote_url, local_path, max_retries=3):
+        """Downloads a file from a URL if it does not already exist or is corrupted."""
+        if os.path.isfile(local_path) and self.verify_file(local_path):
+            return
+
+        import urllib3
+        import shutil
+        from tqdm.notebook import tqdm
+        
+        for attempt in range(max_retries):
+            try:
+                http = urllib3.PoolManager()
+                chunk_size = 8192 * 1024  # 8MB chunks
+                
+                with http.request('GET', remote_url, preload_content=False) as r:
+                    total_length = int(r.headers.get('content-length', 0))
+                    
+                    with tqdm(total=total_length, unit='B', unit_scale=True, unit_divisor=1024,
+                             desc=f"Downloading {os.path.basename(local_path)} (Attempt {attempt + 1}/{max_retries})",
+                             bar_format='{desc}: {percentage:3.1f}%|{bar}| {n:.1f}/{total:.1f} {unit} [{elapsed}<{remaining}]') as pbar:
+                        with open(local_path, 'wb') as out_file:
+                            while True:
+                                data = r.read(chunk_size)
+                                if not data:
+                                    break
+                                out_file.write(data)
+                                pbar.update(len(data))
+                
+                # Verify the downloaded file
+                if self.verify_file(local_path):
+                    return
+                
+            except Exception as e:
+                print(f"\nDownload attempt {attempt + 1} failed: {e}")
+                if os.path.exists(local_path):
+                    os.remove(local_path)
+                if attempt == max_retries - 1:
+                    raise RuntimeError(f"Failed to download {local_path} after {max_retries} attempts")
 
     
 

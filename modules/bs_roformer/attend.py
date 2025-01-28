@@ -60,11 +60,16 @@ class Attend(nn.Module):
 
         device_properties = torch.cuda.get_device_properties(torch.device('cuda'))
 
-        if device_properties.major == 8 and device_properties.minor == 0:
-            print_once('A100 GPU detected, using flash attention if input tensor is on cuda')
+        # Check for A100 (8.0) or RTX 4090 (8.9)
+        is_a100 = device_properties.major == 8 and device_properties.minor == 0
+        is_rtx4090 = device_properties.major == 8 and device_properties.minor == 9
+        
+        if is_a100 or is_rtx4090:
+            gpu_name = "A100" if is_a100 else "RTX 4090"
+            print_once(f'{gpu_name} GPU detected, using flash attention if input tensor is on cuda')
             self.cuda_config = FlashAttentionConfig(True, False, False)
         else:
-            print_once('Non-A100 GPU detected, using math or mem efficient attention if input tensor is on cuda')
+            print_once('Non-A100/RTX4090 GPU detected, using math or mem efficient attention if input tensor is on cuda')
             self.cuda_config = FlashAttentionConfig(False, True, True)
 
     def flash_attn(self, q, k, v):

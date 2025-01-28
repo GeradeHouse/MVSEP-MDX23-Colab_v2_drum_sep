@@ -3,3 +3,10 @@
 inference-old.py
 .venv
 nohup.out
+modules/__pycache__/segm_models.cpython-310.pyc
+modules/__pycache__/tfc_tdf_v2.cpython-310.pyc
+modules/__pycache__/tfc_tdf_v3.cpython-310.pyc
+modules/bs_roformer/__pycache__/__init__.cpython-310.pyc
+modules/bs_roformer/__pycache__/attend.cpython-310.pyc
+modules/bs_roformer/__pycache__/bs_roformer.cpython-310.pyc
+modules/bs_roformer/__pycache__/mel_band_roformer.cpython-310.pyc
