@@ -13,7 +13,6 @@ if __name__ == '__main__':
     import sys
     import argparse
     from time import time
-    # ... (other imports)
 
     # Create NVIDIA library directories
     nvidia_dirs = ['/usr/local/nvidia/lib', '/usr/local/nvidia/lib64', '/usr/lib64-nvidia']
@@ -25,7 +24,7 @@ if __name__ == '__main__':
         # Create lib directory if it doesn't exist
         lib_dir = '/usr/lib64-nvidia'
         os.makedirs(lib_dir, exist_ok=True)
-        print(f"Created directory: {lib_dir}")
+        # print(f"Created directory: {lib_dir}")
         
         # Change to the lib directory
         os.chdir(lib_dir)
@@ -45,7 +44,6 @@ if __name__ == '__main__':
         for lib in libs:
             if os.path.exists(lib) or os.path.islink(lib):
                 os.remove(lib)
-                print(f"Removed existing symlink: {lib}")
         
         # Create symbolic links pointing directly to the actual .so.9 files
         symlinks = {
@@ -59,9 +57,8 @@ if __name__ == '__main__':
         for link_name, target in symlinks.items():
             try:
                 os.symlink(target, link_name)
-                print(f"Created symlink: {link_name} -> {target}")
-            except OSError as e:
-                print(f"Error creating symlink {link_name}: {e}")
+            except OSError:
+                pass  # Ignore symlink errors
         
         # Create unversioned symlinks
         unversioned = {
@@ -74,24 +71,18 @@ if __name__ == '__main__':
         for link_name, target in unversioned.items():
             try:
                 os.symlink(target, link_name)
-                print(f"Created symlink: {link_name} -> {target}")
-            except OSError as e:
-                print(f"Error creating symlink {link_name}: {e}")
+            except OSError:
+                pass  # Ignore symlink errors
         
         # Update the linker cache
         subprocess.run(['ldconfig'], check=True)
         
-        print("Symbolic links created and linker cache updated successfully.")
-
-    except subprocess.CalledProcessError as e:
-        print(f"An error occurred while creating symbolic links: {e}")
+    except subprocess.CalledProcessError:
+        pass
 
     finally:
         # Change back to the original working directory
         os.chdir('/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2')
-
-    # Confirm the current working directory
-    print(f"Current working directory: {os.getcwd()}")
 
     # === Update LD_LIBRARY_PATH ===
     import site
@@ -102,9 +93,8 @@ if __name__ == '__main__':
     # Update the linker cache again to recognize the new LD_LIBRARY_PATH
     try:
         subprocess.run(['ldconfig'], check=True)
-        print("Linker cache updated after modifying LD_LIBRARY_PATH.")
-    except subprocess.CalledProcessError as e:
-        print(f"An error occurred while updating linker cache: {e}")
+    except subprocess.CalledProcessError:
+        pass
 
     # Update LD_LIBRARY_PATH with all NVIDIA paths
     nvidia_paths = [
@@ -135,7 +125,7 @@ if __name__ == '__main__':
 
 
 import inspect
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 import numpy as np
 import torch
 import torch.nn as nn
@@ -322,7 +312,7 @@ def demix_new_wrapper(mix, device, model, config, dim_t=256, bigshifts=1, batch_
 
     results = []
 
-    for shift in tqdm(shifts, position=0):
+    for shift in tqdm(shifts, desc="Processing shifts"):
         shifted_mix = np.concatenate((mix[:, -shift:], mix[:, :-shift]), axis=-1)
         sources = demix_new(model, shifted_mix, device, config, dim_t=dim_t, batch_size=batch_size)
         vocals = next(sources[key] for key in sources.keys() if key.lower() == "vocals")
@@ -380,7 +370,7 @@ def demix_full_vitlarge(mix, device, model):
     results1 = []
     results2 = []
     mix = torch.from_numpy(mix).type('torch.FloatTensor').to(device)
-    for shift in tqdm(shifts, position=0):
+    for shift in tqdm(shifts, desc="Processing shifts"):
         shifted_mix = torch.cat((mix[:, -shift:], mix[:, :-shift]), dim=-1)
         sources = demix_vitlarge(model, shifted_mix, device)
         sources1 = sources["vocals"]
@@ -404,7 +394,7 @@ def demix_wrapper(mix, device, models, infer_session, overlap=0.2, bigshifts=1, 
     shifts = [x * shift_in_samples for x in range(bigshifts)]
     results = []
     
-    for shift in tqdm(shifts, position=0):
+    for shift in tqdm(shifts, desc="Processing shifts"):
         shifted_mix = np.concatenate((mix[:, -shift:], mix[:, :-shift]), axis=-1)
         sources = demix(shifted_mix, device, models, infer_session, overlap) * vc # 1.021 volume compensation
         restored_sources = np.concatenate((sources[..., shift:], sources[..., :shift]), axis=-1)
@@ -545,88 +535,29 @@ class EnsembleDemucsMDXMusicSeparationModel:
                 os.remove(file_path)
             return False
 
-    def download_file_if_not_exists(self, remote_url, local_path, max_retries=3):
-        """Downloads a file from a URL if it does not already exist or is corrupted."""
-        if os.path.isfile(local_path) and self.verify_file(local_path):
-            return
-
-        import urllib3
-        import shutil
-        from tqdm.notebook import tqdm
-        import time
-        
-        # Create a PoolManager with retry strategy
-        retry_strategy = urllib3.Retry(
-            total=5,  # number of retries
-            backoff_factor=0.5,  # wait 0.5s * (2 ^ (retry - 1)) between retries
-            status_forcelist=[500, 502, 503, 504]  # HTTP status codes to retry on
-        )
-        http = urllib3.PoolManager(
-            retries=retry_strategy,
-            timeout=urllib3.Timeout(connect=5, read=10)  # 5s connect timeout, 10s read timeout
-        )
-        
-        chunk_size = 1024 * 1024  # 1MB chunks for more frequent updates
-        temp_path = local_path + '.tmp'
-        
-        for attempt in range(max_retries):
-            try:
-                # Use a HEAD request first to get content length
-                with http.request('HEAD', remote_url) as head_response:
-                    total_length = int(head_response.headers.get('content-length', 0))
-                
-                # Now start the actual download
-                with http.request('GET', remote_url, preload_content=False) as r:
-                    with tqdm(total=total_length, unit='B', unit_scale=True, unit_divisor=1024,
-                            desc=f"Downloading {os.path.basename(local_path)} (Attempt {attempt + 1}/{max_retries})",
-                            bar_format='{desc}: {percentage:3.1f}%|{bar}| {n:.1f}/{total:.1f} {unit} [{elapsed}<{remaining}]') as pbar:
-                        
-                        with open(temp_path, 'wb') as out_file:
-                            downloaded = 0
-                            last_update = time.time()
-                            
-                            while True:
-                                try:
-                                    data = r.read(chunk_size)
-                                    if not data:
-                                        break
-                                    
-                                    out_file.write(data)
-                                    downloaded += len(data)
-                                    pbar.update(len(data))
-                                    
-                                    # Check for stalled download (no progress for 30 seconds)
-                                    current_time = time.time()
-                                    if current_time - last_update > 30:
-                                        raise TimeoutError("Download stalled - no progress for 30 seconds")
-                                    last_update = current_time
-                                    
-                                except (urllib3.exceptions.ReadTimeoutError, TimeoutError) as e:
-                                    print(f"\nTimeout during download: {e}")
-                                    raise  # Re-raise to trigger retry
-                
-                # Move temp file to final location
-                shutil.move(temp_path, local_path)
-                
-                # Verify the downloaded file
-                if self.verify_file(local_path):
-                    print(f"\nSuccessfully downloaded and verified {os.path.basename(local_path)}")
+    def download_file_if_not_exists(self, remote_url, local_path):
+        """Downloads a file from a URL if it does not already exist."""
+        if os.path.isfile(local_path):
+            # For YAML files, verify content
+            if local_path.endswith('.yaml'):
+                try:
+                    import yaml
+                    with open(local_path, 'r') as f:
+                        yaml.load(f, Loader=yaml.FullLoader)
                     return
-                else:
-                    raise ValueError("Downloaded file verification failed")
-                
-            except Exception as e:
-                print(f"\nDownload attempt {attempt + 1} failed: {e}")
-                # Clean up temp and corrupted files
-                for path in [temp_path, local_path]:
-                    if os.path.exists(path):
-                        os.remove(path)
-                
-                if attempt == max_retries - 1:
-                    raise RuntimeError(f"Failed to download {local_path} after {max_retries} attempts")
-                
-                # Wait before retrying
-                time.sleep(2 ** attempt)  # Exponential backoff
+                except:
+                    os.remove(local_path)
+            # For other files, verify they can be loaded
+            elif self.verify_file(local_path):
+                return
+        
+        # Download with progress bar
+        torch.hub.download_url_to_file(
+            remote_url,
+            local_path,
+            progress=True
+        )
+        
 
     
 
@@ -759,7 +690,7 @@ class EnsembleDemucsMDXMusicSeparationModel:
                 if model_name == "BSRoformer":
                     print(f'Processing vocals with {model_name} model...')
                     # Use larger window size for faster processing while maintaining quality (dim_t) original is 1101
-                    sources_bs = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_bsrofo, self.config_bsrofo, dim_t=2048, bigshifts=options["BigShifts"], batch_size=16)  # BSRoformer with batch_size=16
+                    sources_bs = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_bsrofo, self.config_bsrofo, dim_t=1101, bigshifts=options["BigShifts"], batch_size=8)  # BSRoformer with batch_size=8
                     vocals_bs = match_array_shapes(sources_bs, mixed_sound_array.T)
                     vocals_model_outputs.append(vocals_bs)
                     if not options['large_gpu']:
@@ -773,7 +704,7 @@ class EnsembleDemucsMDXMusicSeparationModel:
                 elif model_name == "Kim_MelRoformer":
                     print(f'Processing vocals with {model_name} model...')
                     # Use larger window size for faster processing while maintaining quality (dim_t) original is 1101
-                    sources_mel = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_melrofo, self.config_melrofo, dim_t=2048, bigshifts=options["BigShifts"], batch_size=4)  # Kim_MelRoformer with batch_size=4
+                    sources_mel = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_melrofo, self.config_melrofo, dim_t=1101, bigshifts=options["BigShifts"], batch_size=4)  # Kim_MelRoformer with batch_size=4
                     vocals_mel = match_array_shapes(sources_mel, mixed_sound_array.T)
                     vocals_model_outputs.append(vocals_mel)
                     if not options['large_gpu']:
@@ -786,7 +717,7 @@ class EnsembleDemucsMDXMusicSeparationModel:
 
                 elif model_name == "InstVoc":
                     print(f'Processing vocals with {model_name} model...')
-                    sources3 = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_mdxv3, self.config_mdxv3, dim_t=2048, bigshifts=options["BigShifts"])
+                    sources3 = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_mdxv3, self.config_mdxv3, dim_t=1024, bigshifts=options["BigShifts"])
                     vocals3 = match_array_shapes(sources3, mixed_sound_array.T)
                     if not options['large_gpu']:
                         print(f'Unloading {model_name} from memory')
@@ -1006,7 +937,7 @@ class EnsembleDemucsMDXMusicSeparationModel:
             try:
                 import os
                 import traceback
-                custom_model_path = "/content/MVSEP-MDX23-Colab_v2/models/modelo_final.th"
+                custom_model_path = "MVSEP-MDX23-Colab_v2/models/modelo_final.th"
                 if os.path.isfile(custom_model_path):
                     print("Performing custom drum separation into kick and hihat.")
                     # Load and initialize the custom drum model
