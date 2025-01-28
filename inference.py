@@ -2,21 +2,47 @@
 
 if __name__ == '__main__':
     import os
-     
+    import subprocess
+
     # === Debug lines to see environment variables and library contents ===
     print("\n--- Debug environment from sub-process ---")
+
+    print("Checking if libcudnn.so.9 and related files exist in /usr/lib64-nvidia/:")
+
+    # Use subprocess to list contents of /usr/lib64-nvidia/
+    try:
+        output = subprocess.check_output(['ls', '-lh', '/usr/lib64-nvidia/'], text=True)
+        print(output)
+    except subprocess.CalledProcessError as e:
+        print(f"Error listing /usr/lib64-nvidia/: {e}")
+
     # Print LD_LIBRARY_PATH
-    os.system("echo 'LD_LIBRARY_PATH=' $LD_LIBRARY_PATH")
+    print("\nLD_LIBRARY_PATH:")
+    ld_library_path = os.environ.get('LD_LIBRARY_PATH', 'Not set')
+    print(ld_library_path)
+
     # List contents of directories in LD_LIBRARY_PATH
-    os.system("ls -lh $LD_LIBRARY_PATH")
+    if ld_library_path:
+        print("\nListing contents of LD_LIBRARY_PATH directories:")
+        for path in ld_library_path.split(':'):
+            print(f"\nContents of {path}:")
+            try:
+                output = subprocess.check_output(['ls', '-lh', path], text=True)
+                print(output)
+            except subprocess.CalledProcessError as e:
+                print(f"Error listing {path}: {e}")
+    else:
+        print("\nLD_LIBRARY_PATH is not set.")
+
     print("--- End of debug info ---\n")
-    
+
     gpu_use = "0"
     print('GPU use: {}'.format(gpu_use))
     os.environ["CUDA_VISIBLE_DEVICES"] = "{}".format(gpu_use)
-    
+
 import warnings
 warnings.filterwarnings("ignore")
+
 
 import inspect
 from tqdm.auto import tqdm
