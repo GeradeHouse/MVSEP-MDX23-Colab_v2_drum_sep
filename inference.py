@@ -968,8 +968,8 @@ class EnsembleDemucsMDXMusicSeparationModel:
                     print(f"Sources shape after model: {sources_drum.shape}")
 
                     # Extract hihat and kick stems
-                    hihat = sources_drum[model.sources.index(two_stems)].T
-                    kick = (sources_drum.sum(axis=0) - sources_drum[model.sources.index(two_stems)]).T
+                    hihat = sources_drum[custom_drum_model.sources.index(two_stems)].T
+                    kick = (sources_drum.sum(axis=0) - sources_drum[custom_drum_model.sources.index(two_stems)]).T
 
                     # Update separated_music_arrays
                     separated_music_arrays["hihat"] = hihat
@@ -982,7 +982,9 @@ class EnsembleDemucsMDXMusicSeparationModel:
                         del separated_music_arrays['drums']
                         del output_sample_rates['drums']
                         
-                    print("Successfully separated drums into kick and hihat stems")
+                    print(f"Successfully separated drums into kick and hihat stems")
+                    print(f"Hihat shape: {hihat.shape}")
+                    print(f"Kick shape: {kick.shape}")
 
                 else:
                     print(f"Custom drum model file not found at {custom_model_path}. Skipping drum separation.")
