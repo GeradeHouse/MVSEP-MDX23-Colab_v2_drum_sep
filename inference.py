@@ -1008,11 +1008,30 @@ def predict_with_model(options):
     output_extension = 'flac' if output_format == 'FLAC' else "wav"
     output_format = 'PCM_16' if output_format == 'FLAC' else options['output_format']
     
+    def check_stems_exist(output_subfolder):
+        """Check if all required stems exist in the output folder (either .wav or .flac format)"""
+        required_stems = ['kick', 'hihat', 'vocals', 'bass', 'other']
+        for stem in required_stems:
+            # Check if either .wav or .flac version exists
+            stem_exists = any([
+                os.path.isfile(os.path.join(output_subfolder, f"{stem}{ext}"))
+                for ext in ['.wav', '.flac']
+            ])
+            if not stem_exists:
+                return False
+        return True
+
     # Validate input files
+    valid_audio_extensions = ['.wav', '.mp3', '.flac', '.ogg', '.m4a', '.wma', '.aac']
     for input_audio in options['input_audio']:
         if not os.path.isfile(input_audio):
             print('Error. No such file: {}. Please check path!'.format(input_audio))
             return
+        
+        file_ext = os.path.splitext(input_audio)[1].lower()
+        if file_ext not in valid_audio_extensions:
+            print('Skipping non-audio file: {}. Supported formats: {}'.format(input_audio, valid_audio_extensions))
+            continue
 
     # Create output folder with proper permissions for Google Drive
     output_folder = options['output_folder']
@@ -1027,7 +1046,19 @@ def predict_with_model(options):
     model = EnsembleDemucsMDXMusicSeparationModel(options)
 
     for i, input_audio in enumerate(options['input_audio']):
-        print('Go for: {}'.format(input_audio))
+        file_ext = os.path.splitext(input_audio)[1].lower()
+        if file_ext not in valid_audio_extensions:
+            continue
+        
+        # Check if output folder already exists with all stems
+        input_basename = os.path.splitext(os.path.basename(input_audio))[0]
+        output_subfolder = os.path.join(output_folder, input_basename)
+        
+        if os.path.exists(output_subfolder) and check_stems_exist(output_subfolder):
+            print(f'Skipping already processed file: {input_audio}')
+            continue
+            
+        print('Processing audio file: {}'.format(input_audio))
         
         # Create output subfolder with proper permissions
         input_basename = os.path.splitext(os.path.basename(input_audio))[0]
