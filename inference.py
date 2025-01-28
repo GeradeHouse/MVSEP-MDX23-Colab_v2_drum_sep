@@ -937,7 +937,7 @@ class EnsembleDemucsMDXMusicSeparationModel:
             try:
                 import os
                 import traceback
-                custom_model_path = "MVSEP-MDX23-Colab_v2/models/modelo_final.th"
+                custom_model_path = os.path.join(self.model_folder, 'modelo_final.th')
                 if os.path.isfile(custom_model_path):
                     print("Performing custom drum separation into kick and hihat.")
                     # Load and initialize the custom drum model
@@ -1105,8 +1105,8 @@ def predict_with_model(options):
                 
             # Copy input audio to output folder
             import shutil
-            input_ext = os.path.splitext(input_audio)[1]
-            input_copy_path = os.path.join(output_subfolder, f"input{input_ext}")
+            input_filename = os.path.basename(input_audio)
+            input_copy_path = os.path.join(output_subfolder, input_filename)
             shutil.copy2(input_audio, input_copy_path)
         except Exception as e:
             print(f"Error creating output subfolder or copying input file: {e}")
