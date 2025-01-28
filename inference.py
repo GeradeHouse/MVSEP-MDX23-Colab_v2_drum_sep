@@ -944,13 +944,21 @@ class EnsembleDemucsMDXMusicSeparationModel:
 
                 # Load the custom drum model
                 repo_path = Path("/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2/models/")
-                custom_model_path = Path("/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2/models/demucs-drums.th")
-                custom_drum_model = get_model("demucs-drums.th", repo=repo_path).to(self.device)
+                custom_model_path = Path("/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2/models/demucs-drums-fixed.th")
+                custom_drum_model = get_model("demucs-drums-fixed.th", repo=repo_path).to(self.device)
                 custom_drum_model.eval()
 
                 # Set up parameters for model application
                 overlap = self.overlap_demucs
                 # print(f"  - Debug: overlap for custom_drum_model: {overlap}")
+
+                print(f"Calling apply_model with:")
+                print(f"Model: {custom_drum_model}")
+                print(f"Input: {drums_audio.shape}")
+                print(f"Device: {self.device}")
+                print(f"Shifts: {self.shifts_drum}")
+                print(f"Split: True")
+                print(f"Overlap: {overlap_custom}")
 
                 # Apply the custom drum model
                 out_regular = apply_model(
@@ -959,8 +967,18 @@ class EnsembleDemucsMDXMusicSeparationModel:
                     device=self.device,
                     shifts=self.shifts_drum,
                     split=True,
-                    overlap=overlap
+                    overlap=overlap_custom
                 )[0].cpu().numpy()
+
+                print(f"out_regular shape: {out_regular.shape}")
+
+                print(f"Calling apply_model with:")
+                print(f"Model: {custom_drum_model}")
+                print(f"Input: {-drums_audio.shape}")
+                print(f"Device: {self.device}")
+                print(f"Shifts: {self.shifts_drum}")
+                print(f"Split: True")
+                print(f"Overlap: {overlap_custom}")
 
                 out_inverted = (
                     -apply_model(
@@ -969,20 +987,27 @@ class EnsembleDemucsMDXMusicSeparationModel:
                         device=self.device,
                         shifts=self.shifts_drum,
                         split=True,
-                        overlap=overlap
+                        overlap=overlap_custom
                     )[0]
                     .cpu()
                     .numpy()
                 )
+
+                print(f"out_inverted shape: {out_inverted.shape}")
 
                 # Combine the outputs with equal weights
                 sources_drum = 0.5 * out_regular + 0.5 * out_inverted
                 print(f"Sources shape after model: {sources_drum.shape}")
 
                 # Extract hihat and kick stems
+                print(f"sources_drum shape: {sources_drum.shape}")
+                print(f"sources_drum: {sources_drum}")
                 hihat_idx = custom_drum_model.sources.index('hihat')
+                print(f"hihat_idx: {hihat_idx}")
                 hihat = sources_drum[hihat_idx].T
                 kick = sources_drum.sum(axis=0) - sources_drum[hihat_idx]
+                print(f"hihat shape: {hihat.shape}")
+                print(f"kick shape: {kick.shape}")
 
                 # Update separated_music_arrays
                 separated_music_arrays["hihat"] = hihat
@@ -1044,7 +1069,7 @@ def predict_with_model(options):
             print('Skipping non-audio file: {}. Supported formats: {}'.format(input_audio, valid_audio_extensions))
             continue
 
-    # Create output folder with proper permissions for Google Drive
+    # Create output folder with proper permissions
     output_folder = options['output_folder']
     try:
         if not os.path.isdir(output_folder):
