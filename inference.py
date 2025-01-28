@@ -901,7 +901,7 @@ class EnsembleDemucsMDXMusicSeparationModel:
             try:
                 import os
                 import traceback
-                custom_model_path = "/content/MVSEP-MDX23-Colab_v2/models/modelo_final.th"
+                custom_model_path = os.path.join(self.model_folder, "modelo_final.th")
                 if os.path.isfile(custom_model_path):
                     print("Performing custom drum separation into kick and hihat.")
                     # Load and initialize the custom drum model
