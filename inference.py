@@ -4,12 +4,21 @@ if __name__ == '__main__':
     import os
     import subprocess
 
+# coding: utf-8
+
+import os
+import subprocess
+
+if __name__ == '__main__':
+    import sys
+    import argparse
+    from time import time
+    # ... (other imports)
+
     # === Debug lines to see environment variables and library contents ===
     print("\n--- Debug environment from sub-process ---")
 
     print("Checking if libcudnn.so.9 and related files exist in /usr/lib64-nvidia/:")
-
-    # Use subprocess to list contents of /usr/lib64-nvidia/
     try:
         output = subprocess.check_output(['ls', '-lh', '/usr/lib64-nvidia/'], text=True)
         print(output)
@@ -22,7 +31,7 @@ if __name__ == '__main__':
     print(ld_library_path)
 
     # List contents of directories in LD_LIBRARY_PATH
-    if ld_library_path:
+    if ld_library_path and ld_library_path != 'Not set':
         print("\nListing contents of LD_LIBRARY_PATH directories:")
         for path in ld_library_path.split(':'):
             print(f"\nContents of {path}:")
@@ -36,12 +45,78 @@ if __name__ == '__main__':
 
     print("--- End of debug info ---\n")
 
+    # === Change Directory and Create Correct Symbolic Links ===
+    try:
+        # Change to /usr/lib64-nvidia to create symbolic links
+        os.chdir('/usr/lib64-nvidia/')
+        
+        # Remove existing symlinks if they exist
+        libs = ['libcudnn.so', 'libcudnn_adv.so', 'libcudnn_cnn.so', 'libcudnn_ops.so']
+        for lib in libs:
+            subprocess.run(['sudo', 'rm', '-f', lib], check=True)
+            print(f"Removed existing symlink: {lib}")
+        
+        # Create symbolic links pointing directly to the actual .so.9 files
+        subprocess.run([
+            'sudo', 'ln', '-sf', 
+            '/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib/libcudnn.so.9', 
+            'libcudnn.so.9'
+        ], check=True)
+        subprocess.run([
+            'sudo', 'ln', '-sf', 
+            '/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib/libcudnn_adv.so.9', 
+            'libcudnn_adv.so.9'
+        ], check=True)
+        subprocess.run([
+            'sudo', 'ln', '-sf', 
+            '/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib/libcudnn_cnn.so.9', 
+            'libcudnn_cnn.so.9'
+        ], check=True)
+        subprocess.run([
+            'sudo', 'ln', '-sf', 
+            '/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib/libcudnn_ops.so.9', 
+            'libcudnn_ops.so.9'
+        ], check=True)
+        
+        # Create unversioned symlinks if necessary
+        subprocess.run(['sudo', 'ln', '-sf', 'libcudnn.so.9', 'libcudnn.so'], check=True)
+        subprocess.run(['sudo', 'ln', '-sf', 'libcudnn_adv.so.9', 'libcudnn_adv.so'], check=True)
+        subprocess.run(['sudo', 'ln', '-sf', 'libcudnn_cnn.so.9', 'libcudnn_cnn.so'], check=True)
+        subprocess.run(['sudo', 'ln', '-sf', 'libcudnn_ops.so.9', 'libcudnn_ops.so'], check=True)
+        
+        # Update the linker cache
+        subprocess.run(['sudo', 'ldconfig'], check=True)
+        
+        print("Symbolic links created and linker cache updated successfully.")
+
+    except subprocess.CalledProcessError as e:
+        print(f"An error occurred while creating symbolic links: {e}")
+
+    finally:
+        # Change back to the original working directory
+        os.chdir('/content/MVSEP-MDX23-Colab_v2')
+
+    # Confirm the current working directory
+    print(f"Current working directory: {os.getcwd()}")
+
+    # === Update LD_LIBRARY_PATH ===
+    cudnn_lib_path = '/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib/'
+    os.environ['LD_LIBRARY_PATH'] = f"{cudnn_lib_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
+
+    # Update the linker cache again to recognize the new LD_LIBRARY_PATH
+    try:
+        subprocess.run(['sudo', 'ldconfig'], check=True)
+        print("Linker cache updated after modifying LD_LIBRARY_PATH.")
+    except subprocess.CalledProcessError as e:
+        print(f"An error occurred while updating linker cache: {e}")
+
+    # Continue with the rest of your script
     gpu_use = "0"
     print('GPU use: {}'.format(gpu_use))
     os.environ["CUDA_VISIBLE_DEVICES"] = "{}".format(gpu_use)
 
-import warnings
-warnings.filterwarnings("ignore")
+    import warnings
+    warnings.filterwarnings("ignore")
 
 
 import inspect
