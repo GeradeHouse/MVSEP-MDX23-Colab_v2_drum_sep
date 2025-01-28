@@ -213,10 +213,9 @@ def get_model_from_config(model_type, config_path):
 
 
 
-def demix_new(model, mix, device, config, dim_t=256):
+def demix_new(model, mix, device, config, dim_t=256, batch_size=4):  # Default to 4 for safety
     mix = torch.tensor(mix)
-    N = options["overlap_BSRoformer"]
-    batch_size = 8 # Increased batch size to process more chunks simultaneously
+    N = options["overlap_'BSRoformer'"]
     mdx_window_size = dim_t
     C = config.audio.hop_length * (mdx_window_size - 1)
     fade_size = C // 100
@@ -241,9 +240,6 @@ def demix_new(model, mix, device, config, dim_t=256):
     window_finish[:fade_size] *= fadein # Last audio chunk, no fadeout
     window_middle[-fade_size:] *= fadeout
     window_middle[:fade_size] *= fadein
-
-
-
 
     with torch.cuda.amp.autocast():
         with torch.inference_mode():
@@ -302,7 +298,7 @@ def demix_new(model, mix, device, config, dim_t=256):
         return {k: v for k, v in zip([config.training.target_instrument], estimated_sources)}
 
 
-def demix_new_wrapper(mix, device, model, config, dim_t=256, bigshifts=1):
+def demix_new_wrapper(mix, device, model, config, dim_t=256, bigshifts=1, batch_size=4):
     if bigshifts <= 0:
         bigshifts = 1
 
@@ -313,7 +309,7 @@ def demix_new_wrapper(mix, device, model, config, dim_t=256, bigshifts=1):
 
     for shift in tqdm(shifts, position=0):
         shifted_mix = np.concatenate((mix[:, -shift:], mix[:, :-shift]), axis=-1)
-        sources = demix_new(model, shifted_mix, device, config, dim_t=dim_t)
+        sources = demix_new(model, shifted_mix, device, config, dim_t=dim_t, batch_size=batch_size)
         vocals = next(sources[key] for key in sources.keys() if key.lower() == "vocals")
         unshifted_vocals = np.concatenate((vocals[..., shift:], vocals[..., :shift]), axis=-1)  
         vocals *= 1 # 1.0005168 CHECK NEEDED! volume compensation
@@ -658,7 +654,7 @@ class EnsembleDemucsMDXMusicSeparationModel:
                 if model_name == "BSRoformer":
                     print(f'Processing vocals with {model_name} model...')
                     # Use larger window size for faster processing while maintaining quality (dim_t) original is 1101
-                    sources_bs = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_bsrofo, self.config_bsrofo, dim_t=2048, bigshifts=options["BigShifts"])
+                    sources_bs = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_bsrofo, self.config_bsrofo, dim_t=2048, bigshifts=options["BigShifts"], batch_size=16)  # BSRoformer with batch_size=16
                     vocals_bs = match_array_shapes(sources_bs, mixed_sound_array.T)
                     vocals_model_outputs.append(vocals_bs)
                     if not options['large_gpu']:
@@ -672,7 +668,7 @@ class EnsembleDemucsMDXMusicSeparationModel:
                 elif model_name == "Kim_MelRoformer":
                     print(f'Processing vocals with {model_name} model...')
                     # Use larger window size for faster processing while maintaining quality (dim_t) original is 1101
-                    sources_mel = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_melrofo, self.config_melrofo, dim_t=2048, bigshifts=options["BigShifts"])
+                    sources_mel = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_melrofo, self.config_melrofo, dim_t=2048, bigshifts=options["BigShifts"], batch_size=4)  # Kim_MelRoformer with batch_size=4
                     vocals_mel = match_array_shapes(sources_mel, mixed_sound_array.T)
                     vocals_model_outputs.append(vocals_mel)
                     if not options['large_gpu']:
