@@ -996,18 +996,25 @@ class EnsembleDemucsMDXMusicSeparationModel:
     
 
 def predict_with_model(options):
-
+    # Configure output format
     output_format = options['output_format']
     output_extension = 'flac' if output_format == 'FLAC' else "wav"
     output_format = 'PCM_16' if output_format == 'FLAC' else options['output_format']
     
+    # Validate input files
     for input_audio in options['input_audio']:
         if not os.path.isfile(input_audio):
             print('Error. No such file: {}. Please check path!'.format(input_audio))
             return
+
+    # Create output folder with proper permissions for Google Drive
     output_folder = options['output_folder']
-    if not os.path.isdir(output_folder):
-        os.mkdir(output_folder)
+    try:
+        if not os.path.isdir(output_folder):
+            os.makedirs(output_folder, exist_ok=True)
+    except Exception as e:
+        print(f"Error creating output folder {output_folder}: {e}")
+        return
 
     model = None
     model = EnsembleDemucsMDXMusicSeparationModel(options)
@@ -1015,16 +1022,21 @@ def predict_with_model(options):
     for i, input_audio in enumerate(options['input_audio']):
         print('Go for: {}'.format(input_audio))
         
-        # Create output subfolder with input audio basename
+        # Create output subfolder with proper permissions
         input_basename = os.path.splitext(os.path.basename(input_audio))[0]
         output_subfolder = os.path.join(output_folder, input_basename)
-        if not os.path.isdir(output_subfolder):
-            os.makedirs(output_subfolder)
-            
-        # Copy input audio to output folder
-        import shutil
-        input_ext = os.path.splitext(input_audio)[1]
-        shutil.copy2(input_audio, os.path.join(output_subfolder, f"input{input_ext}"))
+        try:
+            if not os.path.isdir(output_subfolder):
+                os.makedirs(output_subfolder, exist_ok=True)
+                
+            # Copy input audio to output folder
+            import shutil
+            input_ext = os.path.splitext(input_audio)[1]
+            input_copy_path = os.path.join(output_subfolder, f"input{input_ext}")
+            shutil.copy2(input_audio, input_copy_path)
+        except Exception as e:
+            print(f"Error creating output subfolder or copying input file: {e}")
+            return
         
         audio, sr = librosa.load(input_audio, mono=False, sr=44100)
         if len(audio.shape) == 1:
@@ -1053,30 +1065,57 @@ def predict_with_model(options):
         if not has_both_drum_stems:
             stems_to_write.append('drums')
             
-        # Write remaining stems
+        # Write remaining stems with error handling
         for instrum in stems_to_write:
             if instrum in result:  # Only write stems that exist in result
-                output_name = f"{instrum}.{output_extension}"
-                if options["restore_gain"] is True:  # restoring original gain
-                    result[instrum] = dBgain(result[instrum], -options['input_gain'])
-                sf.write(os.path.join(output_subfolder, output_name), result[instrum], sample_rates[instrum], subtype=output_format)
-                print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
+                try:
+                    output_name = f"{instrum}.{output_extension}"
+                    output_path = os.path.join(output_subfolder, output_name)
+                    
+                    # Ensure the parent directory exists
+                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                    
+                    if options["restore_gain"] is True:  # restoring original gain
+                        result[instrum] = dBgain(result[instrum], -options['input_gain'])
+                    
+                    # Write the file with error handling
+                    sf.write(output_path, result[instrum], sample_rates[instrum], subtype=output_format)
+                    print('File created: {}'.format(output_path))
+                except Exception as e:
+                    print(f"Error writing {instrum} stem to {output_path}: {e}")
+                    continue
 
-        # Write instrum stem (instrumental part 1)
-        inst = result['instrum']
-        if options["restore_gain"] is True:
-            inst = dBgain(inst, -options['input_gain'])
-        output_name = f"instrum.{output_extension}"
-        sf.write(os.path.join(output_subfolder, output_name), inst, sr, subtype=output_format)
-        print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
+        # Write instrum stem (instrumental part 1) with error handling
+        try:
+            inst = result['instrum']
+            if options["restore_gain"] is True:
+                inst = dBgain(inst, -options['input_gain'])
+            output_name = f"instrum.{output_extension}"
+            output_path = os.path.join(output_subfolder, output_name)
+            
+            # Ensure the parent directory exists
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            sf.write(output_path, inst, sr, subtype=output_format)
+            print('File created: {}'.format(output_path))
+        except Exception as e:
+            print(f"Error writing instrum stem to {output_path}: {e}")
         
-        # Optionally write combined instrumental version
+        # Optionally write combined instrumental version with error handling
         if options['vocals_only'] is False and options['instrumental_version'] is True:
-            # Generate combined instrumental version (bass + drums + other)
-            inst2 = (result['bass'] + result['drums'] + result['other'])
-            output_name = f"instrumental.{output_extension}"
-            sf.write(os.path.join(output_subfolder, output_name), inst2, sr, subtype=output_format)
-            print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
+            try:
+                # Generate combined instrumental version (bass + drums + other)
+                inst2 = (result['bass'] + result['drums'] + result['other'])
+                output_name = f"instrumental.{output_extension}"
+                output_path = os.path.join(output_subfolder, output_name)
+                
+                # Ensure the parent directory exists
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                
+                sf.write(output_path, inst2, sr, subtype=output_format)
+                print('File created: {}'.format(output_path))
+            except Exception as e:
+                print(f"Error writing instrumental version to {output_path}: {e}")
 
 
 # Linkwitz-Riley filter
