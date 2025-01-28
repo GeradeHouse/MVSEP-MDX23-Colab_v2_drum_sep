@@ -94,7 +94,7 @@ if __name__ == '__main__':
 
     finally:
         # Change back to the original working directory
-        os.chdir('/content/MVSEP-MDX23-Colab_v2')
+        os.chdir(os.path.dirname(os.path.realpath(__file__)))
 
     # Confirm the current working directory
     print(f"Current working directory: {os.getcwd()}")
