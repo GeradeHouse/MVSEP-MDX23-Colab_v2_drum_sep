@@ -1,3 +1,5 @@
+# Note: Install PyTorch with CUDA support separately using:
+# pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 numpy
 soundfile
 scipy
@@ -5,8 +7,7 @@ tqdm
 librosa
 demucs
 onnxruntime-gpu==1.20.1  # Explicitly match CUDA 12/cuDNN 9 compatibility
-nvidia-cudnn-cu12==9.1.0.70  # Required by PyTorch 2.5.1+cu121
-torch==2.5.1+cu121  # Explicit CUDA-enabled PyTorch
+nvidia-cudnn-cu12==9.1.0.70
 pyyaml
 ml_collections
 #pytorch_lightning
