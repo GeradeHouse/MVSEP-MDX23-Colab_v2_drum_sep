@@ -3,10 +3,18 @@
 if __name__ == '__main__':
     import os
      
+    # === Debug lines to see environment variables and library contents ===
+    print("\n--- Debug environment from sub-process ---")
+    # Print LD_LIBRARY_PATH
+    os.system("echo 'LD_LIBRARY_PATH=' $LD_LIBRARY_PATH")
+    # List contents of directories in LD_LIBRARY_PATH
+    os.system("ls -lh $LD_LIBRARY_PATH")
+    print("--- End of debug info ---\n")
+    
     gpu_use = "0"
-
     print('GPU use: {}'.format(gpu_use))
     os.environ["CUDA_VISIBLE_DEVICES"] = "{}".format(gpu_use)
+    
 import warnings
 warnings.filterwarnings("ignore")
 
