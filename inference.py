@@ -216,7 +216,7 @@ def get_model_from_config(model_type, config_path):
 def demix_new(model, mix, device, config, dim_t=256):
     mix = torch.tensor(mix)
     N = options["overlap_BSRoformer"]
-    batch_size = 4 # Increased batch size to process more chunks simultaneously
+    batch_size = 8 # Increased batch size to process more chunks simultaneously
     mdx_window_size = dim_t
     C = config.audio.hop_length * (mdx_window_size - 1)
     fade_size = C // 100
@@ -908,19 +908,27 @@ class EnsembleDemucsMDXMusicSeparationModel:
                 custom_model_path = "/content/MVSEP-MDX23-Colab_v2/models/modelo_final.th"
                 if os.path.isfile(custom_model_path):
                     print("Performing custom drum separation into kick and hihat.")
+                    # Load and initialize the custom drum model
                     checkpoint = torch.load(custom_model_path, map_location=self.device)
                     ModelClass = checkpoint["klass"]
                     model_args = checkpoint["args"]
                     model_kwargs = checkpoint["kwargs"]
+                    
+                    # Initialize model with proper arguments
                     custom_drum_model = ModelClass(*model_args, **model_kwargs)
                     custom_drum_model.load_state_dict(checkpoint["state"])
                     custom_drum_model.eval()
                     custom_drum_model.to(self.device)
 
-                    # If the model doesn't have a .sources attribute, define a default
+                    # Ensure model has proper sources attribute
                     if not hasattr(custom_drum_model, "sources"):
-                        # For example, if your model uses "kick" and "platillos" as sources:
+                        print("Model missing sources attribute, setting default: ['kick', 'platillos']")
                         custom_drum_model.sources = ["kick", "platillos"]
+                    else:
+                        print(f"Model sources: {custom_drum_model.sources}")
+
+                    if len(custom_drum_model.sources) != 2 or "platillos" not in custom_drum_model.sources:
+                        print("Warning: Model sources may not be configured correctly for kick/hihat separation")
 
                     # Use the same overlap logic or a custom overlap, e.g. 0.25
                     overlap_custom = 0.25
@@ -959,27 +967,27 @@ class EnsembleDemucsMDXMusicSeparationModel:
                         overlap=overlap_custom
                     )[0].cpu().numpy()
 
-                    # Merge them
+                    # Combine the outputs with equal weights
                     sources_drum = 0.5 * out_regular + 0.5 * out_inverted
+                    print(f"Sources shape after model: {sources_drum.shape}")
 
-                    # If your custom model has exactly 2 sources, e.g. ["kick", "platillos"]
-                    if len(custom_drum_model.sources) == 2 and two_stems in custom_drum_model.sources:
-                        # Extract 'hihat' from the index of `two_stems`
-                        hihat_idx = custom_drum_model.sources.index(two_stems)
-                        hihat = sources_drum[hihat_idx].T
-                        # Kick is the total minus the hihat track
-                        kick = (sources_drum.sum(axis=0) - sources_drum[hihat_idx]).T
+                    # Extract hihat and kick stems
+                    hihat = sources_drum[model.sources.index(two_stems)].T
+                    kick = (sources_drum.sum(axis=0) - sources_drum[model.sources.index(two_stems)]).T
 
-                        separated_music_arrays["kick"]  = kick
-                        separated_music_arrays["hihat"] = hihat
-                        output_sample_rates["kick"]  = sample_rate
-                        output_sample_rates["hihat"] = sample_rate
-                        # Remove drums stem since we have kick and hihat
-                        if 'drums' in separated_music_arrays:
-                            del separated_music_arrays['drums']
-                            del output_sample_rates['drums']
-                    else:
-                        print("Custom drum model does not have 2 sources or missing 'platillos', skipping kick/hihat assignment.")
+                    # Update separated_music_arrays
+                    separated_music_arrays["hihat"] = hihat
+                    separated_music_arrays["kick"] = kick
+                    output_sample_rates["hihat"] = sample_rate
+                    output_sample_rates["kick"] = sample_rate
+                        
+                    # Remove drums stem since we have kick and hihat
+                    if 'drums' in separated_music_arrays:
+                        del separated_music_arrays['drums']
+                        del output_sample_rates['drums']
+                        
+                    print("Successfully separated drums into kick and hihat stems")
+
                 else:
                     print(f"Custom drum model file not found at {custom_model_path}. Skipping drum separation.")
             except Exception as e:
@@ -1105,8 +1113,14 @@ def predict_with_model(options):
         # Optionally write combined instrumental version with error handling
         if options['vocals_only'] is False and options['instrumental_version'] is True:
             try:
-                # Generate combined instrumental version (bass + drums + other)
-                inst2 = (result['bass'] + result['drums'] + result['other'])
+                # Generate combined instrumental version
+                if has_both_drum_stems:
+                    # If we have kick and hihat, use those instead of drums
+                    inst2 = (result['bass'] + result['kick'] + result['hihat'] + result['other'])
+                else:
+                    # Otherwise use the original drums stem
+                    inst2 = (result['bass'] + result['drums'] + result['other'])
+                
                 output_name = f"instrumental.{output_extension}"
                 output_path = os.path.join(output_subfolder, output_name)
                 
