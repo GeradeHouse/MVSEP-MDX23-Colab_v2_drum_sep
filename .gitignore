@@ -21,3 +21,5 @@ models/Kim_MelRoformer.yaml
 models/Kim_MelRoformer.ckpt
 models/model_bs_roformer_ep_368_sdr_12.9628.ckpt
 models/model_bs_roformer_ep_368_sdr_12.9628.ckpt
+data_disassembled.txt
+data_strings.txt

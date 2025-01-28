@@ -134,7 +134,10 @@ import argparse
 import soundfile as sf
 from demucs.states import load_model
 from demucs import pretrained
-from demucs.apply import apply_model
+from demucs.apply import apply_model, BagOfModels
+from demucs.pretrained import get_model
+from demucs.pretrained import get_model as get_pretrained_model
+
 import onnxruntime as ort
 from time import time
 import librosa
@@ -145,7 +148,7 @@ import yaml
 from ml_collections import ConfigDict
 import sys
 import math
-import pathlib
+from pathlib import Path
 import warnings
 from scipy.signal import resample_poly
 
@@ -932,100 +935,72 @@ class EnsembleDemucsMDXMusicSeparationModel:
             separated_music_arrays['drums'] = mixed_sound_array - vocals - bass - other
             separated_music_arrays['bass']  = mixed_sound_array - vocals - drums - other
 
-            # -----------------------------------------------------------------
-            # Additional separation of drums into kick and hihat using the custom model
+            # Custom drum model separation
             try:
-                import os
-                import traceback
-                custom_model_path = os.path.join(self.model_folder, 'modelo_final.th')
-                if os.path.isfile(custom_model_path):
-                    print("Performing custom drum separation into kick and hihat.")
-                    # Load and initialize the custom drum model
-                    checkpoint = torch.load(custom_model_path, map_location=self.device)
-                    ModelClass = checkpoint["klass"]
-                    model_args = checkpoint["args"]
-                    model_kwargs = checkpoint["kwargs"]
-                    
-                    # Initialize model with proper arguments
-                    custom_drum_model = ModelClass(*model_args, **model_kwargs)
-                    custom_drum_model.load_state_dict(checkpoint["state"])
-                    custom_drum_model.eval()
-                    custom_drum_model.to(self.device)
+                # ----------Model 8: custom_drum_model---------
 
-                    # Ensure model has proper sources attribute
-                    if not hasattr(custom_drum_model, "sources"):
-                        print("Model missing sources attribute, setting default: ['kick', 'platillos']")
-                        custom_drum_model.sources = ["kick", "platillos"]
-                    else:
-                        print(f"Model sources: {custom_drum_model.sources}")
+                # Convert separated drums to tensor and add batch dimension
+                drums_audio = torch.from_numpy(separated_music_arrays["drums"].T).type(torch.FloatTensor).to(self.device).unsqueeze(0)
 
-                    if len(custom_drum_model.sources) != 2 or "platillos" not in custom_drum_model.sources:
-                        print("Warning: Model sources may not be configured correctly for kick/hihat separation")
+                # Load the custom drum model
+                repo_path = Path("/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2/models/")
+                custom_model_path = Path("/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2/models/demucs-drums.th")
+                custom_drum_model = get_model("demucs-drums.th", repo=repo_path).to(self.device)
+                custom_drum_model.eval()
 
-                    # Use the same overlap logic or a custom overlap, e.g. 0.25
-                    overlap_custom = 0.25
-                    two_stems = "platillos"
+                # Set up parameters for model application
+                overlap = self.overlap_demucs
+                # print(f"  - Debug: overlap for custom_drum_model: {overlap}")
 
-                    # Attempt to retrieve samplerate & segment from the model
-                    try:
-                        segment_size = int(custom_drum_model.samplerate * custom_drum_model.segment)
-                    except Exception as e:
-                        print(f"  - Error: Error getting segment size for custom_drum_model: {e}")
-                        traceback.print_exc()
-                        raise
-                    
-                    # Calculate the stride based on the segment size and overlap usefull for calculating the total of updates for a tqdm progress bar
-                    # stride = int((1 - overlap_custom) * segment_size) 
+                # Apply the custom drum model
+                out_regular = apply_model(
+                    custom_drum_model,
+                    drums_audio,
+                    device=self.device,
+                    shifts=self.shifts_drum,
+                    split=True,
+                    overlap=overlap
+                )[0].cpu().numpy()
 
-                    # Prepare the drums track
-                    drums_audio = separated_music_arrays["drums"]
-                    drums_audio = np.expand_dims(drums_audio.T, axis=0)
-                    drums_audio_torch = torch.from_numpy(drums_audio).float().to(self.device)
-
-                    # Mirror-flip trick using configurable number of shifts for both forward and inverted passes
-                    out_regular = apply_model(
+                out_inverted = (
+                    -apply_model(
                         custom_drum_model,
-                        drums_audio_torch,
-                        shifts=self.shifts_drum,  # Number of shifts for forward pass
+                        -drums_audio,
+                        device=self.device,
+                        shifts=self.shifts_drum,
                         split=True,
-                        overlap=overlap_custom
-                    )[0].cpu().numpy()
+                        overlap=overlap
+                    )[0]
+                    .cpu()
+                    .numpy()
+                )
+
+                # Combine the outputs with equal weights
+                sources_drum = 0.5 * out_regular + 0.5 * out_inverted
+                print(f"Sources shape after model: {sources_drum.shape}")
+
+                # Extract hihat and kick stems
+                hihat_idx = custom_drum_model.sources.index('hihat')
+                hihat = sources_drum[hihat_idx].T
+                kick = sources_drum.sum(axis=0) - sources_drum[hihat_idx]
+
+                # Update separated_music_arrays
+                separated_music_arrays["hihat"] = hihat
+                separated_music_arrays["kick"] = kick
+                output_sample_rates["hihat"] = sample_rate
+                output_sample_rates["kick"] = sample_rate
                     
-                    out_inverted = -apply_model(
-                        custom_drum_model,
-                        -drums_audio_torch,
-                        shifts=self.shifts_drum,  # Number of shifts for inverted pass
-                        split=True,
-                        overlap=overlap_custom
-                    )[0].cpu().numpy()
+                # Remove drums stem since we have kick and hihat
+                if 'drums' in separated_music_arrays:
+                    del separated_music_arrays['drums']
+                    del output_sample_rates['drums']
+                    
+                print(f"Successfully separated drums into kick and hihat stems")
+                print(f"Hihat shape: {hihat.shape}")
+                print(f"Kick shape: {kick.shape}")
 
-                    # Combine the outputs with equal weights
-                    sources_drum = 0.5 * out_regular + 0.5 * out_inverted
-                    print(f"Sources shape after model: {sources_drum.shape}")
-
-                    # Extract hihat and kick stems
-                    hihat = sources_drum[custom_drum_model.sources.index(two_stems)].T
-                    kick = (sources_drum.sum(axis=0) - sources_drum[custom_drum_model.sources.index(two_stems)]).T
-
-                    # Update separated_music_arrays
-                    separated_music_arrays["hihat"] = hihat
-                    separated_music_arrays["kick"] = kick
-                    output_sample_rates["hihat"] = sample_rate
-                    output_sample_rates["kick"] = sample_rate
-                        
-                    # Remove drums stem since we have kick and hihat
-                    if 'drums' in separated_music_arrays:
-                        del separated_music_arrays['drums']
-                        del output_sample_rates['drums']
-                        
-                    print(f"Successfully separated drums into kick and hihat stems")
-                    print(f"Hihat shape: {hihat.shape}")
-                    print(f"Kick shape: {kick.shape}")
-
-                else:
-                    print(f"Custom drum model file not found at {custom_model_path}. Skipping drum separation.")
             except Exception as e:
-                print(f"Error separating drums into kick/hihat: {e}")
+                print(f"Error while separating drums into kick/hihat: {e}")
             # -----------------------------------------------------------------
 
         # vocals
