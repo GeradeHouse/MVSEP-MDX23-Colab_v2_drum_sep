@@ -10,3 +10,5 @@ modules/bs_roformer/__pycache__/__init__.cpython-310.pyc
 modules/bs_roformer/__pycache__/attend.cpython-310.pyc
 modules/bs_roformer/__pycache__/bs_roformer.cpython-310.pyc
 modules/bs_roformer/__pycache__/mel_band_roformer.cpython-310.pyc
+models/model_bs_roformer_ep_368_sdr_12.9628.ckpt
+models/model_bs_roformer_ep_368_sdr_12.9628.ckpt

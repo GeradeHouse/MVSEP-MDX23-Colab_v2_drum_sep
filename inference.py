@@ -553,36 +553,80 @@ class EnsembleDemucsMDXMusicSeparationModel:
         import urllib3
         import shutil
         from tqdm.notebook import tqdm
+        import time
+        
+        # Create a PoolManager with retry strategy
+        retry_strategy = urllib3.Retry(
+            total=5,  # number of retries
+            backoff_factor=0.5,  # wait 0.5s * (2 ^ (retry - 1)) between retries
+            status_forcelist=[500, 502, 503, 504]  # HTTP status codes to retry on
+        )
+        http = urllib3.PoolManager(
+            retries=retry_strategy,
+            timeout=urllib3.Timeout(connect=5, read=10)  # 5s connect timeout, 10s read timeout
+        )
+        
+        chunk_size = 1024 * 1024  # 1MB chunks for more frequent updates
+        temp_path = local_path + '.tmp'
         
         for attempt in range(max_retries):
             try:
-                http = urllib3.PoolManager()
-                chunk_size = 8192 * 1024  # 8MB chunks
+                # Use a HEAD request first to get content length
+                with http.request('HEAD', remote_url) as head_response:
+                    total_length = int(head_response.headers.get('content-length', 0))
                 
+                # Now start the actual download
                 with http.request('GET', remote_url, preload_content=False) as r:
-                    total_length = int(r.headers.get('content-length', 0))
-                    
                     with tqdm(total=total_length, unit='B', unit_scale=True, unit_divisor=1024,
-                             desc=f"Downloading {os.path.basename(local_path)} (Attempt {attempt + 1}/{max_retries})",
-                             bar_format='{desc}: {percentage:3.1f}%|{bar}| {n:.1f}/{total:.1f} {unit} [{elapsed}<{remaining}]') as pbar:
-                        with open(local_path, 'wb') as out_file:
+                            desc=f"Downloading {os.path.basename(local_path)} (Attempt {attempt + 1}/{max_retries})",
+                            bar_format='{desc}: {percentage:3.1f}%|{bar}| {n:.1f}/{total:.1f} {unit} [{elapsed}<{remaining}]') as pbar:
+                        
+                        with open(temp_path, 'wb') as out_file:
+                            downloaded = 0
+                            last_update = time.time()
+                            
                             while True:
-                                data = r.read(chunk_size)
-                                if not data:
-                                    break
-                                out_file.write(data)
-                                pbar.update(len(data))
+                                try:
+                                    data = r.read(chunk_size)
+                                    if not data:
+                                        break
+                                    
+                                    out_file.write(data)
+                                    downloaded += len(data)
+                                    pbar.update(len(data))
+                                    
+                                    # Check for stalled download (no progress for 30 seconds)
+                                    current_time = time.time()
+                                    if current_time - last_update > 30:
+                                        raise TimeoutError("Download stalled - no progress for 30 seconds")
+                                    last_update = current_time
+                                    
+                                except (urllib3.exceptions.ReadTimeoutError, TimeoutError) as e:
+                                    print(f"\nTimeout during download: {e}")
+                                    raise  # Re-raise to trigger retry
+                
+                # Move temp file to final location
+                shutil.move(temp_path, local_path)
                 
                 # Verify the downloaded file
                 if self.verify_file(local_path):
+                    print(f"\nSuccessfully downloaded and verified {os.path.basename(local_path)}")
                     return
+                else:
+                    raise ValueError("Downloaded file verification failed")
                 
             except Exception as e:
                 print(f"\nDownload attempt {attempt + 1} failed: {e}")
-                if os.path.exists(local_path):
-                    os.remove(local_path)
+                # Clean up temp and corrupted files
+                for path in [temp_path, local_path]:
+                    if os.path.exists(path):
+                        os.remove(path)
+                
                 if attempt == max_retries - 1:
                     raise RuntimeError(f"Failed to download {local_path} after {max_retries} attempts")
+                
+                # Wait before retrying
+                time.sleep(2 ** attempt)  # Exponential backoff
 
     
 
