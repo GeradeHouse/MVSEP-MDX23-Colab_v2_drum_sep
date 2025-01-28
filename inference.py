@@ -215,9 +215,8 @@ def get_model_from_config(model_type, config_path):
 
 def demix_new(model, mix, device, config, dim_t=256):
     mix = torch.tensor(mix)
-    #N = options["overlap_BSRoformer"]
-    N = 2 # overlap 50%
-    batch_size = 1
+    N = options["overlap_BSRoformer"]
+    batch_size = 4 # Increased batch size to process more chunks simultaneously
     mdx_window_size = dim_t
     C = config.audio.hop_length * (mdx_window_size - 1)
     fade_size = C // 100
@@ -658,7 +657,8 @@ class EnsembleDemucsMDXMusicSeparationModel:
 
                 if model_name == "BSRoformer":
                     print(f'Processing vocals with {model_name} model...')
-                    sources_bs = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_bsrofo, self.config_bsrofo, dim_t=1101, bigshifts=options["BigShifts"])
+                    # Use larger window size for faster processing while maintaining quality (dim_t) original is 1101
+                    sources_bs = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_bsrofo, self.config_bsrofo, dim_t=2048, bigshifts=options["BigShifts"])
                     vocals_bs = match_array_shapes(sources_bs, mixed_sound_array.T)
                     vocals_model_outputs.append(vocals_bs)
                     if not options['large_gpu']:
@@ -671,7 +671,8 @@ class EnsembleDemucsMDXMusicSeparationModel:
 
                 elif model_name == "Kim_MelRoformer":
                     print(f'Processing vocals with {model_name} model...')
-                    sources_mel = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_melrofo, self.config_melrofo, dim_t=1101, bigshifts=options["BigShifts"])
+                    # Use larger window size for faster processing while maintaining quality (dim_t) original is 1101
+                    sources_mel = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_melrofo, self.config_melrofo, dim_t=2048, bigshifts=options["BigShifts"])
                     vocals_mel = match_array_shapes(sources_mel, mixed_sound_array.T)
                     vocals_model_outputs.append(vocals_mel)
                     if not options['large_gpu']:
