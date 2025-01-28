@@ -1,0 +1,1296 @@
+# coding: utf-8
+
+if __name__ == '__main__':
+    import os
+    import subprocess
+
+# coding: utf-8
+
+import os
+import subprocess
+
+if __name__ == '__main__':
+    import sys
+    import argparse
+    from time import time
+
+    # Create NVIDIA library directories
+    nvidia_dirs = ['/usr/local/nvidia/lib', '/usr/local/nvidia/lib64', '/usr/lib64-nvidia']
+    for dir_path in nvidia_dirs:
+        os.makedirs(dir_path, exist_ok=True)
+
+    # === Change Directory and Create Correct Symbolic Links ===
+    try:
+        # Create lib directory if it doesn't exist
+        lib_dir = '/usr/lib64-nvidia'
+        os.makedirs(lib_dir, exist_ok=True)
+        # print(f"Created directory: {lib_dir}")
+        
+        # Change to the lib directory
+        os.chdir(lib_dir)
+        
+        # Get path to cudnn installation in virtual environment
+        import site
+        site_packages = site.getsitepackages()[0]
+        cudnn_lib_path = os.path.join(site_packages, 'nvidia/cudnn/lib')
+        
+        # Remove all existing symlinks
+        libs = [
+            'libcudnn.so', 'libcudnn.so.9',
+            'libcudnn_adv.so', 'libcudnn_adv.so.9',
+            'libcudnn_cnn.so', 'libcudnn_cnn.so.9',
+            'libcudnn_ops.so', 'libcudnn_ops.so.9'
+        ]
+        for lib in libs:
+            if os.path.exists(lib) or os.path.islink(lib):
+                os.remove(lib)
+        
+        # Create symbolic links pointing directly to the actual .so.9 files
+        symlinks = {
+            'libcudnn.so.9': os.path.join(cudnn_lib_path, 'libcudnn.so.9'),
+            'libcudnn_adv.so.9': os.path.join(cudnn_lib_path, 'libcudnn_adv.so.9'),
+            'libcudnn_cnn.so.9': os.path.join(cudnn_lib_path, 'libcudnn_cnn.so.9'),
+            'libcudnn_ops.so.9': os.path.join(cudnn_lib_path, 'libcudnn_ops.so.9')
+        }
+        
+        # Create versioned symlinks
+        for link_name, target in symlinks.items():
+            try:
+                os.symlink(target, link_name)
+            except OSError:
+                pass  # Ignore symlink errors
+        
+        # Create unversioned symlinks
+        unversioned = {
+            'libcudnn.so': 'libcudnn.so.9',
+            'libcudnn_adv.so': 'libcudnn_adv.so.9',
+            'libcudnn_cnn.so': 'libcudnn_cnn.so.9',
+            'libcudnn_ops.so': 'libcudnn_ops.so.9'
+        }
+        
+        for link_name, target in unversioned.items():
+            try:
+                os.symlink(target, link_name)
+            except OSError:
+                pass  # Ignore symlink errors
+        
+        # Update the linker cache
+        subprocess.run(['ldconfig'], check=True)
+        
+    except subprocess.CalledProcessError:
+        pass
+
+    finally:
+        # Change back to the original working directory
+        os.chdir('/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2')
+
+    # === Update LD_LIBRARY_PATH ===
+    import site
+    site_packages = site.getsitepackages()[0]
+    cudnn_lib_path = os.path.join(site_packages, 'nvidia/cudnn/lib')
+    os.environ['LD_LIBRARY_PATH'] = f"{cudnn_lib_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
+
+    # Update the linker cache again to recognize the new LD_LIBRARY_PATH
+    try:
+        subprocess.run(['ldconfig'], check=True)
+    except subprocess.CalledProcessError:
+        pass
+
+    # Update LD_LIBRARY_PATH with all NVIDIA paths
+    nvidia_paths = [
+        os.path.join(site.getsitepackages()[0], 'nvidia/cudnn/lib'),
+        '/usr/local/nvidia/lib',
+        '/usr/local/nvidia/lib64',
+        '/usr/lib64-nvidia'
+    ]
+    
+    # Filter out non-existent paths
+    nvidia_paths = [path for path in nvidia_paths if os.path.exists(path)]
+    
+    # Update LD_LIBRARY_PATH
+    current_ld_path = os.environ.get('LD_LIBRARY_PATH', '')
+    new_ld_paths = ':'.join(nvidia_paths)
+    if current_ld_path:
+        os.environ['LD_LIBRARY_PATH'] = f"{new_ld_paths}:{current_ld_path}"
+    else:
+        os.environ['LD_LIBRARY_PATH'] = new_ld_paths
+
+    # Continue with GPU setup
+    gpu_use = "0"
+    print('GPU use: {}'.format(gpu_use))
+    os.environ["CUDA_VISIBLE_DEVICES"] = "{}".format(gpu_use)
+
+    import warnings
+    warnings.filterwarnings("ignore")
+
+
+import inspect
+from tqdm import tqdm
+import numpy as np
+import torch
+import torch.nn as nn
+import os
+import argparse
+import soundfile as sf
+from demucs.states import load_model
+from demucs import pretrained
+from demucs.apply import apply_model
+import onnxruntime as ort
+from time import time
+import librosa
+import hashlib
+from scipy import signal
+import gc
+import yaml
+from ml_collections import ConfigDict
+import sys
+import math
+import pathlib
+import warnings
+from scipy.signal import resample_poly
+
+from modules.tfc_tdf_v2 import Conv_TDF_net_trim_model
+from modules.tfc_tdf_v3 import TFC_TDF_net, STFT
+from modules.segm_models import Segm_Models_Net
+from modules.bs_roformer import BSRoformer
+from modules.bs_roformer import MelBandRoformer
+
+
+
+def get_models(name, device, load=True, vocals_model_type=0):
+    if vocals_model_type == 2:
+        model_vocals = Conv_TDF_net_trim_model(
+            device=device,
+            target_name='vocals',
+            L=11,
+            n_fft=7680,
+            dim_f=3072
+        )
+    elif vocals_model_type == 3:
+        model_vocals = Conv_TDF_net_trim_model(
+            device=device,
+            target_name='instrum',
+            L=11,
+            n_fft=5120,
+            dim_f=2560
+        )
+
+    return [model_vocals]
+
+
+def get_model_from_config(model_type, config_path):
+    with open(config_path) as f:
+        config = ConfigDict(yaml.load(f, Loader=yaml.FullLoader))
+
+        # --- BEGIN NEW CORRUPTION-HANDLING CODE ---
+        # Attempt to infer a matching checkpoint path from the .yaml name
+        ckpt_path = config_path.replace('.yaml', '.ckpt')
+        if os.path.isfile(ckpt_path):
+            try:
+                # Attempt to read a small portion of the .ckpt to detect corruption
+                _ = torch.load(ckpt_path, map_location='cpu')
+            except Exception as e:
+                print(f"\nCorrupted checkpoint detected: {ckpt_path}")
+                print(f"Removing file and will allow re-download. Error detail:\n{e}")
+                os.remove(ckpt_path)
+        # --- END NEW CORRUPTION-HANDLING CODE ---
+
+        if model_type == 'mdx23c':
+            # from modules.tfc_tdf_v3 import TFC_TDF_net
+            model = TFC_TDF_net(config)
+        elif model_type == 'segm_models':
+            # from modules.segm_models import Segm_Models_Net
+            model = Segm_Models_Net(config)
+        elif model_type == 'bs_roformer':
+            # from modules.bs_roformer import BSRoformer
+            model = BSRoformer(
+                **dict(config.model)
+            )
+        elif model_type == 'mel_band_roformer':
+            # from modules.mel_band_roformer import MelBandRoformer
+            model = MelBandRoformer(
+                **dict(config.model)
+            )
+        else:
+            print('Unknown model: {}'.format(model_type))
+            model = None
+    return model, config
+
+
+
+def demix_new(model, mix, device, config, dim_t=256, batch_size=4):  # Default to 4 for safety
+    mix = torch.tensor(mix)
+    N = options["overlap_BSRoformer"]
+    mdx_window_size = dim_t
+    C = config.audio.hop_length * (mdx_window_size - 1)
+    fade_size = C // 100
+    step = int(C // N)
+    border = C - step
+    length_init = mix.shape[-1]
+    #print(f"1: {mix.shape}")
+    
+    # Do pad from the beginning and end to account floating window results better
+    if length_init > 2 * border and (border > 0):
+        mix = nn.functional.pad(mix, (border, border), mode='reflect')
+        
+    
+    # Prepare windows arrays (do 1 time for speed up). This trick repairs click problems on the edges of segment
+    window_size = C
+    fadein = torch.linspace(0, 1, fade_size)
+    fadeout = torch.linspace(1, 0, fade_size)
+    window_start = torch.ones(window_size)
+    window_middle = torch.ones(window_size)
+    window_finish = torch.ones(window_size)
+    window_start[-fade_size:] *= fadeout # First audio chunk, no fadein
+    window_finish[:fade_size] *= fadein # Last audio chunk, no fadeout
+    window_middle[-fade_size:] *= fadeout
+    window_middle[:fade_size] *= fadein
+
+    with torch.cuda.amp.autocast():
+        with torch.inference_mode():
+            if config.training.target_instrument is not None:
+                req_shape = (1, ) + tuple(mix.shape)
+            else:
+                req_shape = (len(config.training.instruments),) + tuple(mix.shape)
+
+            result = torch.zeros(req_shape, dtype=torch.float32)
+            counter = torch.zeros(req_shape, dtype=torch.float32)
+            i = 0
+            batch_data = []
+            batch_locations = []
+            while i < mix.shape[1]:
+                # print(i, i + C, mix.shape[1])
+                part = mix[:, i:i + C].to(device)
+                length = part.shape[-1]
+                if length < C:
+                    if length > C // 2 + 1:
+                        part = nn.functional.pad(input=part, pad=(0, C - length), mode='reflect')
+                    else:
+                        part = nn.functional.pad(input=part, pad=(0, C - length, 0, 0), mode='constant', value=0)
+                batch_data.append(part)
+                batch_locations.append((i, length))
+                i += step
+
+                if len(batch_data) >= batch_size or (i >= mix.shape[1]):
+                    arr = torch.stack(batch_data, dim=0)
+                    x = model(arr)
+
+                    window = window_middle
+                    if i - step == 0:  # First audio chunk, no fadein
+                        window = window_start
+                    elif i >= mix.shape[1]:  # Last audio chunk, no fadeout
+                        window = window_finish
+
+                    for j in range(len(batch_locations)):
+                        start, l = batch_locations[j]
+                        result[..., start:start+l] += x[j][..., :l].cpu() * window[..., :l]
+                        counter[..., start:start+l] += window[..., :l]
+
+                    batch_data = []
+                    batch_locations = []
+
+            estimated_sources = result / counter
+            estimated_sources = estimated_sources.cpu().numpy()
+            np.nan_to_num(estimated_sources, copy=False, nan=0.0)
+
+            if length_init > 2 * border and (border > 0):
+                # Remove pad
+                estimated_sources = estimated_sources[..., border:-border]
+
+    if config.training.target_instrument is None:
+        return {k: v for k, v in zip(config.training.instruments, estimated_sources)}
+    else:
+        return {k: v for k, v in zip([config.training.target_instrument], estimated_sources)}
+
+
+def demix_new_wrapper(mix, device, model, config, dim_t=256, bigshifts=1, batch_size=4):
+    if bigshifts <= 0:
+        bigshifts = 1
+
+    shift_in_samples = mix.shape[1] // bigshifts
+    shifts = [x * shift_in_samples for x in range(bigshifts)]
+
+    results = []
+
+    for shift in tqdm(shifts, desc="Processing shifts"):
+        shifted_mix = np.concatenate((mix[:, -shift:], mix[:, :-shift]), axis=-1)
+        sources = demix_new(model, shifted_mix, device, config, dim_t=dim_t, batch_size=batch_size)
+        vocals = next(sources[key] for key in sources.keys() if key.lower() == "vocals")
+        unshifted_vocals = np.concatenate((vocals[..., shift:], vocals[..., :shift]), axis=-1)  
+        vocals *= 1 # 1.0005168 CHECK NEEDED! volume compensation
+        
+        results.append(unshifted_vocals)
+
+    vocals = np.mean(results, axis=0)
+    
+    return vocals
+
+def demix_vitlarge(model, mix, device):
+    C = model.config.audio.hop_length * (2 * model.config.inference.dim_t - 1)
+    N = 2
+    step = C // N
+
+    with torch.cuda.amp.autocast():
+        with torch.no_grad():
+            if model.config.training.target_instrument is not None:
+                req_shape = (1, ) + tuple(mix.shape)
+            else:
+                req_shape = (len(model.config.training.instruments),) + tuple(mix.shape)
+
+            mix = mix.to(device)
+            result = torch.zeros(req_shape, dtype=torch.float32).to(device)
+            counter = torch.zeros(req_shape, dtype=torch.float32).to(device)
+            i = 0
+
+            while i < mix.shape[1]:
+                part = mix[:, i:i + C]
+                length = part.shape[-1]
+                if length < C:
+                    part = nn.functional.pad(input=part, pad=(0, C - length, 0, 0), mode='constant', value=0)
+                x = model(part.unsqueeze(0))[0]
+                result[..., i:i+length] += x[..., :length]
+                counter[..., i:i+length] += 1.
+                i += step
+            estimated_sources = result / counter
+
+    if model.config.training.target_instrument is None:
+        return {k: v for k, v in zip(model.config.training.instruments, estimated_sources.cpu().numpy())}
+    else:
+        return {k: v for k, v in zip([model.config.training.target_instrument], estimated_sources.cpu().numpy())}
+
+
+def demix_full_vitlarge(mix, device, model):
+    if options["BigShifts"] <= 0:
+        bigshifts = 1
+    else:
+        bigshifts = options["BigShifts"]
+    shift_in_samples = mix.shape[1] // bigshifts
+    shifts = [x * shift_in_samples for x in range(bigshifts)]
+
+    results1 = []
+    results2 = []
+    mix = torch.from_numpy(mix).type('torch.FloatTensor').to(device)
+    for shift in tqdm(shifts, desc="Processing shifts"):
+        shifted_mix = torch.cat((mix[:, -shift:], mix[:, :-shift]), dim=-1)
+        sources = demix_vitlarge(model, shifted_mix, device)
+        sources1 = sources["vocals"]
+        sources2 = sources["other"]
+        restored_sources1 = np.concatenate((sources1[..., shift:], sources1[..., :shift]), axis=-1)
+        restored_sources2 = np.concatenate((sources2[..., shift:], sources2[..., :shift]), axis=-1)
+        results1.append(restored_sources1)
+        results2.append(restored_sources2)
+
+
+    sources1 = np.mean(results1, axis=0)
+    sources2 = np.mean(results2, axis=0)
+
+    return sources1, sources2
+
+
+def demix_wrapper(mix, device, models, infer_session, overlap=0.2, bigshifts=1, vc=1.0):
+    if bigshifts <= 0:
+        bigshifts = 1
+    shift_in_samples = mix.shape[1] // bigshifts
+    shifts = [x * shift_in_samples for x in range(bigshifts)]
+    results = []
+    
+    for shift in tqdm(shifts, desc="Processing shifts"):
+        shifted_mix = np.concatenate((mix[:, -shift:], mix[:, :-shift]), axis=-1)
+        sources = demix(shifted_mix, device, models, infer_session, overlap) * vc # 1.021 volume compensation
+        restored_sources = np.concatenate((sources[..., shift:], sources[..., :shift]), axis=-1)
+        results.append(restored_sources)
+        
+    sources = np.mean(results, axis=0)
+    
+    return sources
+
+def demix(mix, device, models, infer_session, overlap=0.2):
+    start_time = time()
+    sources = []
+    n_sample = mix.shape[1]
+    n_fft = models[0].n_fft
+    n_bins = n_fft//2+1
+    trim = n_fft//2
+    hop = models[0].hop
+    dim_f = models[0].dim_f
+    dim_t = models[0].dim_t # * 2
+    chunk_size = hop * (dim_t -1)
+    org_mix = mix
+    tar_waves_ = []
+    mdx_batch_size = 1
+    overlap = overlap
+    gen_size = chunk_size-2*trim
+    pad = gen_size + trim - ((mix.shape[-1]) % gen_size)
+    
+    mixture = np.concatenate((np.zeros((2, trim), dtype='float32'), mix, np.zeros((2, pad), dtype='float32')), 1)
+
+    step = int((1 - overlap) * chunk_size)
+    result = np.zeros((1, 2, mixture.shape[-1]), dtype=np.float32)
+    divider = np.zeros((1, 2, mixture.shape[-1]), dtype=np.float32)
+    total = 0
+    total_chunks = (mixture.shape[-1] + step - 1) // step
+
+    for i in range(0, mixture.shape[-1], step):
+        total += 1
+        start = i
+        end = min(i + chunk_size, mixture.shape[-1])
+        chunk_size_actual = end - start
+
+        if overlap == 0:
+            window = None
+        else:
+            window = np.hanning(chunk_size_actual)
+            window = np.tile(window[None, None, :], (1, 2, 1))
+
+        mix_part_ = mixture[:, start:end]
+        if end != i + chunk_size:
+            pad_size = (i + chunk_size) - end
+            mix_part_ = np.concatenate((mix_part_, np.zeros((2, pad_size), dtype='float32')), axis=-1)
+        
+        
+        mix_part = torch.tensor([mix_part_], dtype=torch.float32).to(device)
+        mix_waves = mix_part.split(mdx_batch_size)
+        
+        with torch.no_grad():
+            for mix_wave in mix_waves:
+                _ort = infer_session
+                stft_res = models[0].stft(mix_wave)
+                stft_res[:, :, :3, :] *= 0 
+                res = _ort.run(None, {'input': stft_res.cpu().numpy()})[0]
+                ten = torch.tensor(res)
+                tar_waves = models[0].istft(ten.to(device))
+                tar_waves = tar_waves.cpu().detach().numpy()
+                
+                if window is not None:
+                    tar_waves[..., :chunk_size_actual] *= window 
+                    divider[..., start:end] += window
+                else:
+                    divider[..., start:end] += 1
+                result[..., start:end] += tar_waves[..., :end-start]
+
+
+    tar_waves = result / divider
+    tar_waves_.append(tar_waves)
+    tar_waves_ = np.vstack(tar_waves_)[:, :, trim:-trim]
+    tar_waves = np.concatenate(tar_waves_, axis=-1)[:, :mix.shape[-1]]
+    source = tar_waves[:,0:None]
+
+    return source
+
+
+class EnsembleDemucsMDXMusicSeparationModel:
+    """
+    Doesn't do any separation just passes the input back as output
+    """
+    def __init__(self, options):
+        """
+            options - user options
+        """
+        # Device setup
+        if torch.cuda.is_available() and not options.get('cpu', False):
+            self.device = 'cuda:0'
+        else:
+            self.device = 'cpu'
+        
+        self.single_onnx = options.get('single_onnx', False)
+        self.overlap_demucs = min(max(float(options['overlap_demucs']), 0.0), 0.99)
+        self.overlap_MDX = min(max(float(options['overlap_VOCFT']), 0.0), 0.99)
+        self.shifts_drum = options.get('shifts_drum', 1)  # Number of shifts for custom drum separation
+        
+        # Model folder
+        self.model_folder = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'models')
+        
+        self.options = options
+
+
+        # Execution providers for ONNX
+        if self.device == 'cpu':
+            self.providers = ["CPUExecutionProvider"]
+        else:
+            self.providers = ["CUDAExecutionProvider"]
+        
+        # Preloading ensemble models (if not vocals only)
+        if not options.get('vocals_only', False):
+            self.models = []
+            self.weights_vocals = np.array([10, 1, 8, 9])
+            self.weights_bass = np.array([19, 4, 5, 8])
+            self.weights_drums = np.array([18, 2, 4, 9])
+            self.weights_other = np.array([14, 2, 5, 10])
+            
+            model_names = ['htdemucs_ft', 'htdemucs', 'htdemucs_6s', 'hdemucs_mmi']
+            for model_name in model_names:
+                model = pretrained.get_model(model_name)
+                model.to(self.device)
+                self.models.append(model)
+
+    def verify_file(self, file_path):
+        """Verify if a PyTorch checkpoint file is valid."""
+        try:
+            _ = torch.load(file_path, map_location='cpu')
+            return True
+        except Exception as e:
+            print(f"\nCorrupted file detected: {file_path}")
+            print(f"Error detail: {e}")
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            return False
+
+    def download_file_if_not_exists(self, remote_url, local_path):
+        """Downloads a file from a URL if it does not already exist."""
+        if os.path.isfile(local_path):
+            # For YAML files, verify content
+            if local_path.endswith('.yaml'):
+                try:
+                    import yaml
+                    with open(local_path, 'r') as f:
+                        yaml.load(f, Loader=yaml.FullLoader)
+                    return
+                except:
+                    os.remove(local_path)
+            # For other files, verify they can be loaded
+            elif self.verify_file(local_path):
+                return
+        
+        # Download with progress bar
+        torch.hub.download_url_to_file(
+            remote_url,
+            local_path,
+            progress=True
+        )
+        
+
+    
+    # Function for loading the models
+    def load_model(self, model_name, remote_url_ckpt, remote_url_yaml, model_class):
+        """Downloads the model and config if needed, loads them into memory, and moves the model to the specified device."""
+        ckpt_path = os.path.join(self.model_folder, f'{model_name}.ckpt')
+        yaml_path = os.path.join(self.model_folder, f'{model_name}.yaml')
+
+        # Download model files if not present
+        self.download_file_if_not_exists(remote_url_ckpt, ckpt_path)
+        self.download_file_if_not_exists(remote_url_yaml, yaml_path)
+
+        # Load configuration
+        with open(yaml_path, 'r') as f:
+            config = ConfigDict(yaml.load(f, Loader=yaml.FullLoader))
+
+        # Get valid arguments for the model constructor
+        model_args = inspect.signature(model_class.__init__).parameters
+        valid_config = {key: value for key, value in dict(config.model).items() if key in model_args}
+
+        # If the model requires a 'config' argument, pass the full config object
+        if 'config' in model_args:
+            model = model_class(config=config)  # Pass full config if required
+        else:
+            model = model_class(**valid_config)  # Otherwise, pass filtered config
+
+        model.load_state_dict(torch.load(ckpt_path))
+        model = model.to(self.device)
+        model.eval()
+
+        return model, config
+
+
+
+    def load_onnx_model(self, model_path, remote_url):
+        """Downloads and initializes an ONNX model if not already present."""
+        if not os.path.isfile(model_path):
+            self.download_file_if_not_exists(remote_url, model_path)
+        return ort.InferenceSession(model_path, providers=self.providers, provider_options=[{"device_id": 0}])
+
+    def initialize_model_if_needed(self, model_name, options):
+        """Loads a model only if it hasn't been initialized yet."""
+        if model_name == "BSRoformer" and not hasattr(self, 'model_bsrofo'):
+            print(f'Loading {model_name} into memory')
+            bs_model_name = "model_bs_roformer_ep_368_sdr_12.9628" if options["BSRoformer_model"] == "ep_368_1296" else "model_bs_roformer_ep_317_sdr_12.9755"
+            remote_url_ckpt = f'https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/{bs_model_name}.ckpt'
+            remote_url_yaml = f'https://raw.githubusercontent.com/TRvlvr/application_data/main/mdx_model_data/mdx_c_configs/{bs_model_name}.yaml'
+            self.model_bsrofo, self.config_bsrofo = self.load_model(bs_model_name, remote_url_ckpt, remote_url_yaml, BSRoformer)
+
+        elif model_name == "Kim_MelRoformer" and not hasattr(self, 'model_melrofo'):
+            print(f'Loading {model_name} into memory')
+            remote_url_ckpt = f'https://huggingface.co/KimberleyJSN/melbandroformer/resolve/main/MelBandRoformer.ckpt'
+            remote_url_yaml = f'https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/configs/KimberleyJensen/config_vocals_mel_band_roformer_kj.yaml'
+            self.model_melrofo, self.config_melrofo = self.load_model('Kim_MelRoformer', remote_url_ckpt, remote_url_yaml, MelBandRoformer)
+
+        elif model_name == "InstVoc" and not hasattr(self, 'model_mdxv3'):
+            print(f'Loading {model_name} into memory')
+            remote_url_ckpt = 'https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/MDX23C-8KFFT-InstVoc_HQ.ckpt'
+            remote_url_yaml = 'https://raw.githubusercontent.com/TRvlvr/application_data/main/mdx_model_data/mdx_c_configs/model_2_stem_full_band_8k.yaml'
+            self.model_mdxv3, self.config_mdxv3 = self.load_model('MDX23C-8KFFT-InstVoc_HQ', remote_url_ckpt, remote_url_yaml, TFC_TDF_net)
+
+        elif model_name == "VitLarge" and not hasattr(self, 'model_vl'):
+            print(f'Loading {model_name} into memory')
+            remote_url_ckpt = 'https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.0/model_vocals_segm_models_sdr_9.77.ckpt'
+            remote_url_yaml = 'https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.0/config_vocals_segm_models.yaml'
+            self.model_vl, self.config_vl = self.load_model('model_vocals_segm_models_sdr_9.77', remote_url_ckpt, remote_url_yaml, Segm_Models_Net)
+
+        elif model_name == "VOCFT" and not hasattr(self, 'infer_session1'):
+            print(f'Loading {model_name} into memory')
+            model_path = os.path.join(self.model_folder, 'UVR-MDX-NET-Voc_FT.onnx')
+            remote_url = 'https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/UVR-MDX-NET-Voc_FT.onnx'
+            self.infer_session1 = self.load_onnx_model(model_path, remote_url)
+            self.mdx_models1 = get_models('tdf_extra', load=False, device=self.device, vocals_model_type=2)
+
+        elif model_name == "InstHQ4" and not hasattr(self, 'infer_session2'):
+            print(f'Loading {model_name} into memory')
+            model_path = os.path.join(self.model_folder, 'UVR-MDX-NET-Inst_HQ_4.onnx')
+            remote_url = 'https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/UVR-MDX-NET-Inst_HQ_4.onnx'
+            self.infer_session2 = self.load_onnx_model(model_path, remote_url)
+            self.mdx_models2 = get_models('tdf_extra', load=False, device=self.device, vocals_model_type=3)
+
+    @property
+    def instruments(self):
+        if not self.options.get('vocals_only', False):
+            return ['bass', 'drums', 'other', 'vocals']
+        else:
+            return ['vocals']
+
+    def separate_music_file(self, mixed_sound_array, sample_rate, current_file_number=0, total_files=0):
+        """
+        Implements the sound separation for a single sound file
+        Inputs: Outputs from soundfile.read('mixture.wav')
+            mixed_sound_array
+            sample_rate
+
+        Outputs:
+            separated_music_arrays: Dictionary numpy array of each separated instrument
+            output_sample_rates: Dictionary of sample rates separated sequence
+        """
+
+
+
+        separated_music_arrays = {}
+        output_sample_rates = {}
+        
+
+        overlap_demucs = self.overlap_demucs
+        overlap_MDX = self.overlap_MDX
+        shifts = 0
+        overlap = overlap_demucs
+
+
+        vocals_model_names = [
+            "BSRoformer",
+            "Kim_MelRoformer",
+            "InstVoc",
+            "VitLarge",
+            "VOCFT",
+            "InstHQ4"
+        ]
+
+        vocals_model_outputs = []
+        weights = []
+        for model_name in vocals_model_names:
+            if self.options.get(f"use_{model_name}", False):
+                self.initialize_model_if_needed(model_name, self.options)
+
+            if options[f"use_{model_name}"]:
+
+                if model_name == "BSRoformer":
+                    print(f'Processing vocals with {model_name} model...')
+                    # Use larger window size for faster processing while maintaining quality (dim_t) original is 1101
+                    sources_bs = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_bsrofo, self.config_bsrofo, dim_t=1101, bigshifts=options["BigShifts"], batch_size=8)  # BSRoformer with batch_size=8
+                    vocals_bs = match_array_shapes(sources_bs, mixed_sound_array.T)
+                    vocals_model_outputs.append(vocals_bs)
+                    if not options['large_gpu']:
+                        print(f'Unloading {model_name} from memory')
+                        self.model_bsrofo.cpu()
+                        del self.model_bsrofo
+                    del sources_bs
+                    torch.cuda.empty_cache()
+                    weights.append(options.get(f"weight_{model_name}"))
+
+                elif model_name == "Kim_MelRoformer":
+                    print(f'Processing vocals with {model_name} model...')
+                    # Use larger window size for faster processing while maintaining quality (dim_t) original is 1101
+                    sources_mel = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_melrofo, self.config_melrofo, dim_t=1101, bigshifts=options["BigShifts"], batch_size=4)  # Kim_MelRoformer with batch_size=4
+                    vocals_mel = match_array_shapes(sources_mel, mixed_sound_array.T)
+                    vocals_model_outputs.append(vocals_mel)
+                    if not options['large_gpu']:
+                        print(f'Unloading {model_name} from memory')
+                        self.model_melrofo.cpu()
+                        del self.model_melrofo
+                    del sources_mel
+                    torch.cuda.empty_cache()
+                    weights.append(options.get(f"weight_{model_name}"))
+
+                elif model_name == "InstVoc":
+                    print(f'Processing vocals with {model_name} model...')
+                    sources3 = demix_new_wrapper(mixed_sound_array.T, self.device, self.model_mdxv3, self.config_mdxv3, dim_t=1024, bigshifts=options["BigShifts"])
+                    vocals3 = match_array_shapes(sources3, mixed_sound_array.T)
+                    if not options['large_gpu']:
+                        print(f'Unloading {model_name} from memory')
+                        self.model_mdxv3.cpu()
+                        del self.model_mdxv3
+                    del sources3
+                    torch.cuda.empty_cache()
+                    vocals_model_outputs.append(vocals3)
+                    weights.append(options.get(f"weight_{model_name}"))
+
+                elif model_name == "VitLarge":
+                    print(f'Processing vocals with {model_name} model...')
+                    vocals4, instrum4 = demix_full_vitlarge(mixed_sound_array.T, self.device, self.model_vl)#, self.config_vl, dim_t=512)
+                    vocals4 = match_array_shapes(vocals4, mixed_sound_array.T)
+                    vocals_model_outputs.append(vocals4)
+                    if not options['large_gpu']:
+                        print(f'Unloading {model_name} from memory')
+                        self.model_vl.cpu()
+                        del self.model_vl
+                    del vocals4
+                    torch.cuda.empty_cache()
+                    weights.append(options.get(f"weight_{model_name}"))
+
+                elif model_name == "VOCFT":
+                    print(f'Processing vocals with {model_name} model...')
+                    overlap = overlap_MDX
+                    vocals_mdxb1 = 0.5 * demix_wrapper(
+                        mixed_sound_array.T,
+                        self.device,
+                        self.mdx_models1,
+                        self.infer_session1,
+                        overlap=overlap,
+                        vc=1.021,
+                        bigshifts=options['BigShifts'] // 3
+                    )
+                    vocals_mdxb1 += 0.5 * -demix_wrapper(
+                        -mixed_sound_array.T,
+                        self.device,
+                        self.mdx_models1,
+                        self.infer_session1,
+                        overlap=overlap,
+                        vc=1.021,
+                        bigshifts=options['BigShifts'] // 3
+                    )
+                    vocals_model_outputs.append(vocals_mdxb1)
+                    if not options['large_gpu']:
+                        print(f'Unloading {model_name} from memory')
+                        del self.infer_session1, self.mdx_models1
+                    del vocals_mdxb1
+                    torch.cuda.empty_cache()
+                    weights.append(options.get(f"weight_{model_name}"))
+
+                elif model_name == "InstHQ4":
+                    print(f'Processing vocals with {model_name} model...')
+                    overlap = overlap_MDX
+                    sources2 = 0.5 * demix_wrapper(
+                        mixed_sound_array.T,
+                        self.device,
+                        self.mdx_models2,
+                        self.infer_session2,
+                        overlap=overlap,
+                        vc=1.019,
+                        bigshifts=options['BigShifts'] // 3
+                    )
+                    sources2 += 0.5 * -demix_wrapper(
+                        -mixed_sound_array.T,
+                        self.device,
+                        self.mdx_models2,
+                        self.infer_session2,
+                        overlap=overlap,
+                        vc=1.019,
+                        bigshifts=options['BigShifts'] // 3
+                    )
+                    vocals_mdxb2 = mixed_sound_array.T - sources2
+                    vocals_model_outputs.append(vocals_mdxb2)
+                    if not options['large_gpu']:
+                        print(f'Unloading {model_name} from memory')
+                        del self.infer_session2, self.mdx_models2
+                    del vocals_mdxb2, sources2
+                    weights.append(options.get(f"weight_{model_name}"))
+                    torch.cuda.empty_cache()
+
+                else:
+                    # No more model to process or unknown one
+                    pass
+
+        print('Processing vocals: DONE!')
+        
+        vocals_combined = np.zeros_like(vocals_model_outputs[0])
+
+        for output, weight in zip(vocals_model_outputs, weights):
+            vocals_combined += output * weight
+
+        vocals_combined /= np.sum(weights)
+        del vocals_model_outputs
+
+        if options['use_VOCFT']:
+            vocals_low = lr_filter(vocals_combined.T, 12000, 'lowpass') # * 1.01055  # remember to check if new final finetuned volume compensation is needed  !
+            vocals_high = lr_filter(vocals3.T, 12000, 'highpass')
+            vocals = vocals_low + vocals_high
+        else:
+            vocals = vocals_combined.T
+
+        if options['filter_vocals'] is True:
+                vocals = lr_filter(vocals, 50, 'highpass', order=8)
+        
+        # Generate instrumental
+        instrum = mixed_sound_array - vocals
+        
+        if options['vocals_only'] is False:
+            
+            audio = np.expand_dims(instrum.T, axis=0)
+            audio = torch.from_numpy(audio).type('torch.FloatTensor').to(self.device)
+            all_outs = []
+            print('Processing with htdemucs_ft...')
+            i = 0
+            overlap = overlap_demucs
+            model = pretrained.get_model('htdemucs_ft')
+            model.to(self.device)
+            out = 0.5 * apply_model(model, audio, shifts=shifts, overlap=overlap)[0].cpu().numpy() \
+                  + 0.5 * -apply_model(model, -audio, shifts=shifts, overlap=overlap)[0].cpu().numpy()
+       
+            out[0] = self.weights_drums[i] * out[0]
+            out[1] = self.weights_bass[i] * out[1]
+            out[2] = self.weights_other[i] * out[2]
+            out[3] = self.weights_vocals[i] * out[3]
+            all_outs.append(out)
+            model = model.cpu()
+            del model
+            gc.collect()
+            i = 1
+            print('Processing with htdemucs...')
+            overlap = overlap_demucs
+            model = pretrained.get_model('htdemucs')
+            model.to(self.device)
+            out = 0.5 * apply_model(model, audio, shifts=shifts, overlap=overlap)[0].cpu().numpy() \
+                  + 0.5 * -apply_model(model, -audio, shifts=shifts, overlap=overlap)[0].cpu().numpy()
+    
+            out[0] = self.weights_drums[i] * out[0]
+            out[1] = self.weights_bass[i] * out[1]
+            out[2] = self.weights_other[i] * out[2]
+            out[3] = self.weights_vocals[i] * out[3]
+            all_outs.append(out)
+            model = model.cpu()
+            del model
+            gc.collect()
+            i = 2
+            print('Processing with htdemucs_6s...')
+            overlap = overlap_demucs
+            model = pretrained.get_model('htdemucs_6s')
+            model.to(self.device)
+            out = apply_model(model, audio, shifts=shifts, overlap=overlap)[0].cpu().numpy()
+       
+            # Summing the extra stems into the 'other' stem
+            out[2] = out[2] + out[4] + out[5]
+            out = out[:4]
+            out[0] = self.weights_drums[i] * out[0]
+            out[1] = self.weights_bass[i] * out[1]
+            out[2] = self.weights_other[i] * out[2]
+            out[3] = self.weights_vocals[i] * out[3]
+            all_outs.append(out)
+            model = model.cpu()
+            del model
+            gc.collect()
+            i = 3
+            print('Processing with htdemucs_mmi...')
+            model = pretrained.get_model('hdemucs_mmi')
+            model.to(self.device)
+            out = 0.5 * apply_model(model, audio, shifts=shifts, overlap=overlap)[0].cpu().numpy() \
+                  + 0.5 * -apply_model(model, -audio, shifts=shifts, overlap=overlap)[0].cpu().numpy()
+       
+            out[0] = self.weights_drums[i] * out[0]
+            out[1] = self.weights_bass[i] * out[1]
+            out[2] = self.weights_other[i] * out[2]
+            out[3] = self.weights_vocals[i] * out[3]
+            all_outs.append(out)
+            model = model.cpu()
+            del model
+            gc.collect()
+
+            # Aggregate the results from each Demucs variant
+            out = np.array(all_outs).sum(axis=0)
+            out[0] = out[0] / self.weights_drums.sum()
+            out[1] = out[1] / self.weights_bass.sum()
+            out[2] = out[2] / self.weights_other.sum()
+            out[3] = out[3] / self.weights_vocals.sum()
+
+            # other
+            res = mixed_sound_array - vocals - out[0].T - out[1].T
+            res = np.clip(res, -1, 1)
+            separated_music_arrays['other'] = (2 * res + out[2].T) / 3.0
+            output_sample_rates['other'] = sample_rate
+    
+            # drums
+            res = mixed_sound_array - vocals - out[1].T - out[2].T
+            res = np.clip(res, -1, 1)
+            separated_music_arrays['drums'] = (res + 2 * out[0].T.copy()) / 3.0
+            output_sample_rates['drums'] = sample_rate
+    
+            # bass
+            res = mixed_sound_array - vocals - out[0].T - out[2].T
+            res = np.clip(res, -1, 1)
+            separated_music_arrays['bass'] = (res + 2 * out[1].T) / 3.0
+            output_sample_rates['bass'] = sample_rate
+    
+            bass = separated_music_arrays['bass']
+            drums = separated_music_arrays['drums']
+            other = separated_music_arrays['other']
+    
+            # Re-solve final combos to keep them consistent
+            separated_music_arrays['other'] = mixed_sound_array - vocals - bass - drums
+            separated_music_arrays['drums'] = mixed_sound_array - vocals - bass - other
+            separated_music_arrays['bass']  = mixed_sound_array - vocals - drums - other
+
+            # -----------------------------------------------------------------
+            # Additional separation of drums into kick and hihat using the custom model
+            try:
+                import os
+                import traceback
+                custom_model_path = "MVSEP-MDX23-Colab_v2/models/modelo_final.th"
+                if os.path.isfile(custom_model_path):
+                    print("Performing custom drum separation into kick and hihat.")
+                    # Load and initialize the custom drum model
+                    checkpoint = torch.load(custom_model_path, map_location=self.device)
+                    ModelClass = checkpoint["klass"]
+                    model_args = checkpoint["args"]
+                    model_kwargs = checkpoint["kwargs"]
+                    
+                    # Initialize model with proper arguments
+                    custom_drum_model = ModelClass(*model_args, **model_kwargs)
+                    custom_drum_model.load_state_dict(checkpoint["state"])
+                    custom_drum_model.eval()
+                    custom_drum_model.to(self.device)
+
+                    # Ensure model has proper sources attribute
+                    if not hasattr(custom_drum_model, "sources"):
+                        print("Model missing sources attribute, setting default: ['kick', 'platillos']")
+                        custom_drum_model.sources = ["kick", "platillos"]
+                    else:
+                        print(f"Model sources: {custom_drum_model.sources}")
+
+                    if len(custom_drum_model.sources) != 2 or "platillos" not in custom_drum_model.sources:
+                        print("Warning: Model sources may not be configured correctly for kick/hihat separation")
+
+                    # Use the same overlap logic or a custom overlap, e.g. 0.25
+                    overlap_custom = 0.25
+                    two_stems = "platillos"
+
+                    # Attempt to retrieve samplerate & segment from the model
+                    try:
+                        segment_size = int(custom_drum_model.samplerate * custom_drum_model.segment)
+                    except Exception as e:
+                        print(f"  - Error: Error getting segment size for custom_drum_model: {e}")
+                        traceback.print_exc()
+                        raise
+                    
+                    # Calculate the stride based on the segment size and overlap usefull for calculating the total of updates for a tqdm progress bar
+                    # stride = int((1 - overlap_custom) * segment_size) 
+
+                    # Prepare the drums track
+                    drums_audio = separated_music_arrays["drums"]
+                    drums_audio = np.expand_dims(drums_audio.T, axis=0)
+                    drums_audio_torch = torch.from_numpy(drums_audio).float().to(self.device)
+
+                    # Mirror-flip trick using configurable number of shifts for both forward and inverted passes
+                    out_regular = apply_model(
+                        custom_drum_model,
+                        drums_audio_torch,
+                        shifts=self.shifts_drum,  # Number of shifts for forward pass
+                        split=True,
+                        overlap=overlap_custom
+                    )[0].cpu().numpy()
+                    
+                    out_inverted = -apply_model(
+                        custom_drum_model,
+                        -drums_audio_torch,
+                        shifts=self.shifts_drum,  # Number of shifts for inverted pass
+                        split=True,
+                        overlap=overlap_custom
+                    )[0].cpu().numpy()
+
+                    # Combine the outputs with equal weights
+                    sources_drum = 0.5 * out_regular + 0.5 * out_inverted
+                    print(f"Sources shape after model: {sources_drum.shape}")
+
+                    # Extract hihat and kick stems
+                    hihat = sources_drum[custom_drum_model.sources.index(two_stems)].T
+                    kick = (sources_drum.sum(axis=0) - sources_drum[custom_drum_model.sources.index(two_stems)]).T
+
+                    # Update separated_music_arrays
+                    separated_music_arrays["hihat"] = hihat
+                    separated_music_arrays["kick"] = kick
+                    output_sample_rates["hihat"] = sample_rate
+                    output_sample_rates["kick"] = sample_rate
+                        
+                    # Remove drums stem since we have kick and hihat
+                    if 'drums' in separated_music_arrays:
+                        del separated_music_arrays['drums']
+                        del output_sample_rates['drums']
+                        
+                    print(f"Successfully separated drums into kick and hihat stems")
+                    print(f"Hihat shape: {hihat.shape}")
+                    print(f"Kick shape: {kick.shape}")
+
+                else:
+                    print(f"Custom drum model file not found at {custom_model_path}. Skipping drum separation.")
+            except Exception as e:
+                print(f"Error separating drums into kick/hihat: {e}")
+            # -----------------------------------------------------------------
+
+        # vocals
+        separated_music_arrays['vocals'] = vocals
+        output_sample_rates['vocals'] = sample_rate
+
+        # instrum
+        separated_music_arrays['instrum'] = instrum
+
+        return separated_music_arrays, output_sample_rates
+    
+
+def predict_with_model(options):
+    # Configure output format
+    output_format = options['output_format']
+    output_extension = 'flac' if output_format == 'FLAC' else "wav"
+    output_format = 'PCM_16' if output_format == 'FLAC' else options['output_format']
+    
+    def check_stems_exist(output_subfolder):
+        """Check if all required stems exist in the output folder (either .wav or .flac format)"""
+        required_stems = ['kick', 'hihat', 'vocals', 'bass', 'other']
+        for stem in required_stems:
+            # Check if either .wav or .flac version exists
+            stem_exists = any([
+                os.path.isfile(os.path.join(output_subfolder, f"{stem}{ext}"))
+                for ext in ['.wav', '.flac']
+            ])
+            if not stem_exists:
+                return False
+        return True
+
+    # Validate input files
+    valid_audio_extensions = ['.wav', '.mp3', '.flac', '.ogg', '.m4a', '.wma', '.aac']
+    for input_audio in options['input_audio']:
+        if not os.path.isfile(input_audio):
+            print('Error. No such file: {}. Please check path!'.format(input_audio))
+            return
+        
+        file_ext = os.path.splitext(input_audio)[1].lower()
+        if file_ext not in valid_audio_extensions:
+            print('Skipping non-audio file: {}. Supported formats: {}'.format(input_audio, valid_audio_extensions))
+            continue
+
+    # Create output folder with proper permissions for Google Drive
+    output_folder = options['output_folder']
+    try:
+        if not os.path.isdir(output_folder):
+            os.makedirs(output_folder, exist_ok=True)
+    except Exception as e:
+        print(f"Error creating output folder {output_folder}: {e}")
+        return
+
+    model = None
+    model = EnsembleDemucsMDXMusicSeparationModel(options)
+
+    for i, input_audio in enumerate(options['input_audio']):
+        file_ext = os.path.splitext(input_audio)[1].lower()
+        if file_ext not in valid_audio_extensions:
+            continue
+        
+        # Check if output folder already exists with all stems
+        input_basename = os.path.splitext(os.path.basename(input_audio))[0]
+        output_subfolder = os.path.join(output_folder, input_basename)
+        
+        if os.path.exists(output_subfolder) and check_stems_exist(output_subfolder):
+            print(f'Skipping already processed file: {input_audio}')
+            continue
+            
+        print('Processing audio file: {}'.format(input_audio))
+        
+        # Create output subfolder with proper permissions
+        input_basename = os.path.splitext(os.path.basename(input_audio))[0]
+        output_subfolder = os.path.join(output_folder, input_basename)
+        try:
+            if not os.path.isdir(output_subfolder):
+                os.makedirs(output_subfolder, exist_ok=True)
+                
+            # Copy input audio to output folder
+            import shutil
+            input_ext = os.path.splitext(input_audio)[1]
+            input_copy_path = os.path.join(output_subfolder, f"input{input_ext}")
+            shutil.copy2(input_audio, input_copy_path)
+        except Exception as e:
+            print(f"Error creating output subfolder or copying input file: {e}")
+            return
+        
+        audio, sr = librosa.load(input_audio, mono=False, sr=44100)
+        if len(audio.shape) == 1:
+            audio = np.stack([audio, audio], axis=0)
+        
+        if options['input_gain'] != 0:
+            audio = dBgain(audio, options['input_gain'])
+
+        print("Input audio: {} Sample rate: {}".format(audio.shape, sr))
+        result, sample_rates = model.separate_music_file(audio.T, sr, i, len(options['input_audio']))
+
+        # Attempt to write kick and hihat, track success
+        has_both_drum_stems = True
+        for stem in ['kick', 'hihat']:
+            if stem in result:
+                output_name = f"{stem}.{output_extension}"
+                if options["restore_gain"] is True:
+                    result[stem] = dBgain(result[stem], -options['input_gain'])
+                sf.write(os.path.join(output_subfolder, output_name), result[stem], sr, subtype=output_format)
+                print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
+            else:
+                has_both_drum_stems = False
+
+        # Decide which stems to write next, based on drum separation success
+        stems_to_write = ['bass', 'vocals', 'other']
+        if not has_both_drum_stems:
+            stems_to_write.append('drums')
+            
+        # Write remaining stems with error handling
+        for instrum in stems_to_write:
+            if instrum in result:  # Only write stems that exist in result
+                try:
+                    output_name = f"{instrum}.{output_extension}"
+                    output_path = os.path.join(output_subfolder, output_name)
+                    
+                    # Ensure the parent directory exists
+                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                    
+                    if options["restore_gain"] is True:  # restoring original gain
+                        result[instrum] = dBgain(result[instrum], -options['input_gain'])
+                    
+                    # Write the file with error handling
+                    sf.write(output_path, result[instrum], sample_rates[instrum], subtype=output_format)
+                    print('File created: {}'.format(output_path))
+                except Exception as e:
+                    print(f"Error writing {instrum} stem to {output_path}: {e}")
+                    continue
+
+        # Write instrum stem (instrumental part 1) with error handling
+        try:
+            inst = result['instrum']
+            if options["restore_gain"] is True:
+                inst = dBgain(inst, -options['input_gain'])
+            output_name = f"instrum.{output_extension}"
+            output_path = os.path.join(output_subfolder, output_name)
+            
+            # Ensure the parent directory exists
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            sf.write(output_path, inst, sr, subtype=output_format)
+            print('File created: {}'.format(output_path))
+        except Exception as e:
+            print(f"Error writing instrum stem to {output_path}: {e}")
+        
+        # Optionally write combined instrumental version with error handling
+        if options['vocals_only'] is False and options['instrumental_version'] is True:
+            try:
+                # Generate combined instrumental version
+                if has_both_drum_stems:
+                    # If we have kick and hihat, use those instead of drums
+                    inst2 = (result['bass'] + result['kick'] + result['hihat'] + result['other'])
+                else:
+                    # Otherwise use the original drums stem
+                    inst2 = (result['bass'] + result['drums'] + result['other'])
+                
+                output_name = f"instrumental.{output_extension}"
+                output_path = os.path.join(output_subfolder, output_name)
+                
+                # Ensure the parent directory exists
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                
+                sf.write(output_path, inst2, sr, subtype=output_format)
+                print('File created: {}'.format(output_path))
+            except Exception as e:
+                print(f"Error writing instrumental version to {output_path}: {e}")
+
+
+# Linkwitz-Riley filter
+def lr_filter(audio, cutoff, filter_type, order=6, sr=44100):
+    audio = audio.T
+    nyquist = 0.5 * sr
+    normal_cutoff = cutoff / nyquist
+    b, a = signal.butter(order//2, normal_cutoff, btype=filter_type, analog=False)
+    sos = signal.tf2sos(b, a)
+    filtered_audio = signal.sosfiltfilt(sos, audio)
+    return filtered_audio.T
+
+
+def match_array_shapes(array_1:np.ndarray, array_2:np.ndarray):
+    if array_1.shape[1] > array_2.shape[1]:
+        array_1 = array_1[:,:array_2.shape[1]] 
+    elif array_1.shape[1] < array_2.shape[1]:
+        padding = array_2.shape[1] - array_1.shape[1]
+        array_1 = np.pad(array_1, ((0,0), (0,padding)), 'constant', constant_values=0)
+    return array_1
+
+def dBgain(audio, volume_gain_dB):
+    attenuation = 10 ** (volume_gain_dB / 20)
+    gained_audio = audio * attenuation 
+    return gained_audio
+
+## Main function
+
+if __name__ == '__main__':
+    start_time = time()
+    print("started!\n")
+    m = argparse.ArgumentParser()
+    m.add_argument("--input_audio", "-i", nargs='+', type=str, help="Input audio location. You can provide multiple files at once", required=True)
+    m.add_argument("--output_folder", "-r", type=str, help="Output audio folder", required=True)
+    m.add_argument("--large_gpu", action='store_true', help="It will store all models on GPU for faster processing of multiple audio files. Requires 11 and more GB of free GPU memory.")
+    m.add_argument("--single_onnx", action='store_true', help="Only use single ONNX model for vocals. Can be useful if you have not enough GPU memory.")
+    m.add_argument("--cpu", action='store_true', help="Choose CPU instead of GPU for processing. Can be very slow.")
+    m.add_argument("--overlap_demucs", type=float, help="Overlap of splited audio for light models. Closer to 1.0 - slower", required=False, default=0.1)
+    m.add_argument("--overlap_VOCFT", type=float, help="Overlap of splited audio for heavy models. Closer to 1.0 - slower", required=False, default=0.1)
+    m.add_argument("--overlap_InstHQ4", type=float, help="Overlap of splited audio for heavy models. Closer to 1.0 - slower", required=False, default=0.1)
+    m.add_argument("--overlap_VitLarge", type=int, help="Overlap of splited audio for heavy models. Closer to 1.0 - slower", required=False, default=1)
+    m.add_argument("--overlap_InstVoc", type=int, help="MDXv3 overlap", required=False, default=2)
+    m.add_argument("--overlap_BSRoformer", type=int, help="BSRoformer overlap", required=False, default=2)
+    m.add_argument("--weight_InstVoc", type=float, help="Weight of MDXv3 model", required=False, default=3)
+    m.add_argument("--weight_VOCFT", type=float, help="Weight of VOC-FT model", required=False, default=1)
+    m.add_argument("--weight_InstHQ4", type=float, help="Weight of instHQ4 model", required=False, default=1)
+    m.add_argument("--weight_VitLarge", type=float, help="Weight of VitLarge model", required=False, default=1)
+    m.add_argument("--weight_BSRoformer", type=float, help="Weight of BS-Roformer model", required=False, default=8)
+    m.add_argument("--weight_Kim_MelRoformer", type=float, help="Weight of Kim_MelRoformer model", required=False, default=10)
+    m.add_argument("--BigShifts", type=int, help="Managing MDX 'BigShifts' trick value.", required=False, default=3)
+    m.add_argument("--vocals_only",  action='store_true', help="Vocals + instrumental only")
+    m.add_argument("--use_BSRoformer", action='store_true', help="use BSRoformer in vocal ensemble")
+    m.add_argument("--use_Kim_MelRoformer", action='store_true', help="use Kim MelBand Roformer in vocal ensemble")
+    
+    m.add_argument("--BSRoformer_model", type=str, help="Which checkpoint to use", required=False, default="ep_317_1297")
+    m.add_argument("--use_InstVoc", action='store_true', help="use instVoc in vocal ensemble")
+    m.add_argument("--use_VitLarge", action='store_true', help="use VitLarge in vocal ensemble")
+    m.add_argument("--use_InstHQ4", action='store_true', help="use InstHQ4 in vocal ensemble")
+    m.add_argument("--use_VOCFT", action='store_true', help="use VOCFT in vocal ensemble")
+    m.add_argument("--output_format", type=str, help="Output audio folder", default="PCM_16")
+    m.add_argument("--input_gain", type=int, help="input volume gain", required=False, default=0)
+    m.add_argument("--restore_gain", action='store_true', help="restore original gain after separation")
+    m.add_argument("--shifts_drum", type=int, help="Number of shifts to use in custom drum separation (higher values can improve quality at the cost of processing time)", default=1)
+    m.add_argument("--instrumental_version", action='store_true', help="Generate the instrumental version (combined bass+drums+other)", default=True)
+    m.add_argument("--filter_vocals", action='store_true', help="Remove audio below 50hz in vocals stem")
+    options = m.parse_args().__dict__
+    print("Options: ")
+    print(f'large_gpu: {options["large_gpu"]}\n')
+    print(f'Input Gain: {options["input_gain"]}dB')
+    print(f'Restore Gain: {options["restore_gain"]}')
+    print(f'BigShifts: {options["BigShifts"]}\n')
+
+    print(f'BSRoformer_model: {options["BSRoformer_model"]}')
+    print(f'weight_BSRoformer: {options["weight_BSRoformer"]}')
+    print(f'weight_InstVoc: {options["weight_InstVoc"]}\n')
+
+    print(f'use_VitLarge: {options["use_VitLarge"]}')
+    if options["use_VitLarge"] is True:    
+       print(f'weight_VitLarge: {options["weight_VitLarge"]}\n')
+    
+    print(f'use_VOCFT: {options["use_VOCFT"]}')
+    if options["use_VOCFT"] is True:
+        print(f'overlap_VOCFT: {options["overlap_VOCFT"]}')
+        print(f'weight_VOCFT: {options["weight_VOCFT"]}\n')
+        
+    print(f'use_InstHQ4: {options["use_InstHQ4"]}')
+    if options["use_InstHQ4"] is True:
+        print(f'overlap_InstHQ4: {options["overlap_InstHQ4"]}')
+        print(f'weight_InstHQ4: {options["weight_InstHQ4"]}\n')
+
+    print(f'vocals_only: {options["vocals_only"]}')
+    
+    if options["vocals_only"] is False:
+        print(f'overlap_demucs: {options["overlap_demucs"]}\n')
+
+    print(f'output_format: {options["output_format"]}\n')
+    predict_with_model(options)
+    print('Time: {:.0f} sec'.format(time() - start_time))
