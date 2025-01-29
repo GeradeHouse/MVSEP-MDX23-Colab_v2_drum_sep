@@ -1295,7 +1295,7 @@ def predict_with_model(options):
         if not has_both_drum_stems:
             stems_to_write.append('drums')
             
-        # Write remaining stems with error handling
+        # Write remaining stems with error handling (this section needs to be corrected!)
         for instrum in stems_to_write:
             if instrum in result:  # Only write stems that exist in result
                 try:
