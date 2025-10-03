@@ -784,16 +784,6 @@ class EnsembleDemucsMDXMusicSeparationModel:
         # Path to the custom model
         model_path = "/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2/models/demucs-drums-fixed.th"
 
-        # Load the custom model and get parameters
-        try:
-            custom_drum_model, samplerate_custom_drum, segment_custom_drum, num_models_custom_drum = load_custom_model(model_path)
-            custom_drum_model.to(self.device)
-            custom_drum_model.eval()
-            # print("Custom drum model loaded successfully.")
-        except Exception as e:
-            print(f"Error loading custom drum model: {e}")
-            return {}, {}
-
         separated_music_arrays = {}
         output_sample_rates = {}
 
@@ -1065,116 +1055,70 @@ class EnsembleDemucsMDXMusicSeparationModel:
             separated_music_arrays['bass']  = mixed_sound_array - vocals - drums - other
 
             # Custom drum model separation
-            try:
+            if self.options.get('separate_drums'):
+                print("Separating drums into components...")
+                try:
+                    # ----------Model 8: custom_drum_model---------
+                    drums_audio = torch.from_numpy(separated_music_arrays["drums"].T).type(torch.FloatTensor).to(self.device).unsqueeze(0)
 
-                # ----------Model 8: custom_drum_model---------
+                    custom_model_path = Path("/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2/models/demucs-drums-fixed.th")
+                    custom_drum_model, _, _, _ = load_custom_model(custom_model_path)
+                    custom_drum_model.to(self.device)
+                    custom_drum_model.eval()
 
-                # Convert separated drums to tensor and add batch dimension
-                # print(f"separated_music_arrays['drums'].shape: {separated_music_arrays['drums'].shape}")
-                drums_audio = torch.from_numpy(separated_music_arrays["drums"].T).type(torch.FloatTensor).to(self.device).unsqueeze(0)
+                    overlap_custom = self.overlap_demucs
 
-                # print(f"drums_audio.shape: {drums_audio.shape}")
-
-                # Load the custom drum model
-                repo_path = Path("/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2/models/")
-                # print(f"repo_path: {repo_path}")
-                custom_model_path = Path("/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2/models/demucs-drums-fixed.th")
-                # print(f"custom_model_path: {custom_model_path}")
-
-                # Load the custom drum model using the load_custom_model function
-                custom_drum_model, _, _, _ = load_custom_model(custom_model_path)
-                custom_drum_model.to(self.device)
-
-                # print(f"custom_drum_model: {custom_drum_model}")
-
-                # print(f"custom_drum_model.sources: {custom_drum_model.sources}")
-
-                custom_drum_model.eval()
-
-                # Set up parameters for model application
-                overlap = self.overlap_demucs
-                overlap_custom = overlap  # Assuming overlap_custom is intended to be the same as overlap_demucs
-
-                # print(f"Calling apply_model with:")
-                # print(f"Model: {custom_drum_model}")
-                # print(f"Input: {drums_audio.shape}")  # Corrected: Removed unary minus
-                # print(f"Device: {self.device}")
-                # print(f"Shifts: {self.shifts_drum}")
-                # print(f"Split: True")
-                # print(f"Overlap: {overlap_custom}")
-
-                # Apply the custom drum model
-                out_regular = apply_model(
-                    custom_drum_model,
-                    drums_audio,
-                    device=self.device,
-                    shifts=self.shifts_drum,
-                    split=True,
-                    overlap=overlap_custom
-                )[0].cpu().numpy()
-
-                # print(f"out_regular shape: {out_regular.shape}")
-                # print(f"out_regular: {out_regular}")
-
-                # print(f"out_regular shape: {out_regular.shape}")
-
-                # print(f"Calling apply_model with:")
-                # print(f"Model: {custom_drum_model}")
-                # print(f"Input (inverted): drums_audio.shape: {drums_audio.shape}")  # Corrected: Clarified log message
-
-                # Apply the custom drum model to the inverted drums_audio
-                out_inverted = (
-                    -apply_model(
+                    out_regular = apply_model(
                         custom_drum_model,
-                        -drums_audio,  # Inverting the drums_audio tensor
+                        drums_audio,
                         device=self.device,
                         shifts=self.shifts_drum,
                         split=True,
                         overlap=overlap_custom
-                    )[0]
-                    .cpu()
-                    .numpy()
-                )
+                    )[0].cpu().numpy()
 
-                # print(f"out_inverted shape: {out_inverted.shape}")
-                # print(f"out_inverted: {out_inverted}")
+                    out_inverted = (
+                        -apply_model(
+                            custom_drum_model,
+                            -drums_audio,
+                            device=self.device,
+                            shifts=self.shifts_drum,
+                            split=True,
+                            overlap=overlap_custom
+                        )[0]
+                        .cpu()
+                        .numpy()
+                    )
 
-                # print(f"out_inverted shape: {out_inverted.shape}")
+                    sources_drum = 0.5 * out_regular + 0.5 * out_inverted
 
-                # Combine the outputs with equal weights
-                sources_drum = 0.5 * out_regular + 0.5 * out_inverted
-                # print(f"Sources shape after model: {sources_drum.shape}")
+                    # Extract all four drum stems and transpose to (samples, channels)
+                    kick_idx = custom_drum_model.sources.index('kick')
+                    clap_idx = custom_drum_model.sources.index('clap')
+                    hihat_idx = custom_drum_model.sources.index('hihat')
+                    toms_idx = custom_drum_model.sources.index('toms')
 
-                # Extract hihat and kick stems
-                hihat_idx = custom_drum_model.sources.index('hihat')
-                hihat = sources_drum[hihat_idx]  # Removed .T to maintain shape (2, samples)
-                kick = sources_drum.sum(axis=0) - sources_drum[hihat_idx]
+                    separated_music_arrays["kick"] = sources_drum[kick_idx].T
+                    separated_music_arrays["clap"] = sources_drum[clap_idx].T
+                    separated_music_arrays["hihat"] = sources_drum[hihat_idx].T
+                    separated_music_arrays["toms"] = sources_drum[toms_idx].T
+                    
+                    output_sample_rates["kick"] = sample_rate
+                    output_sample_rates["clap"] = sample_rate
+                    output_sample_rates["hihat"] = sample_rate
+                    output_sample_rates["toms"] = sample_rate
 
-                # print(f"Hihat shape: {hihat.shape}")
-                # print(f"Kick shape: {kick.shape}")
+                    # Remove drums stem since we have the components
+                    if 'drums' in separated_music_arrays:
+                        del separated_music_arrays['drums']
+                        del output_sample_rates['drums']
+                    
+                    print("Successfully separated drums into kick, clap, hihat, and toms stems.")
 
-                # Update separated_music_arrays
-                separated_music_arrays["hihat"] = hihat
-                separated_music_arrays["kick"] = kick
-                output_sample_rates["hihat"] = sample_rate
-                output_sample_rates["kick"] = sample_rate
-
-                # print(f"Successfully separated drums into kick and hihat stems")
-                # print(f"Hihat shape: {hihat.shape}")
-                # print(f"Kick shape: {kick.shape}")
-
-                # Remove drums stem since we have kick and hihat
-                if 'drums' in separated_music_arrays:
-                    del separated_music_arrays['drums']
-                    del output_sample_rates['drums']
-
-                # print(f"Successfully separated drums into kick and hihat stems")
-                # print(f"Hihat shape: {hihat.shape}")
-                # print(f"Kick shape: {kick.shape}")
-
-            except Exception as e:
-                print(f"Error while separating drums into kick/hihat: {e}")
-            # -----------------------------------------------------------------
+                except Exception as e:
+                    print(f"Error while separating drums into components: {e}")
+                    print("Proceeding with the standard 'drums' stem.")
+                # -----------------------------------------------------------------
 
         # vocals
         separated_music_arrays['vocals'] = vocals
@@ -1192,9 +1136,13 @@ def predict_with_model(options):
     output_extension = 'flac' if output_format.upper() == 'FLAC' else "wav"
     output_format = 'PCM_16' if output_format.upper() == 'FLAC' else 'FLOAT'
     
-    def check_stems_exist(output_subfolder):
+    def check_stems_exist(output_subfolder, separate_drums_enabled):
         """Check if all required stems exist in the output folder (either .wav or .flac format)"""
-        required_stems = ['kick', 'hihat', 'vocals', 'bass', 'other']
+        if separate_drums_enabled:
+            required_stems = ['kick', 'clap', 'hihat', 'toms', 'vocals', 'bass', 'other']
+        else:
+            required_stems = ['drums', 'vocals', 'bass', 'other']
+
         for stem in required_stems:
             # Check if either .wav or .flac version exists
             stem_exists = any([
@@ -1237,7 +1185,7 @@ def predict_with_model(options):
         input_basename = os.path.splitext(os.path.basename(input_audio))[0]
         output_subfolder = os.path.join(output_folder, input_basename)
         
-        if os.path.exists(output_subfolder) and check_stems_exist(output_subfolder):
+        if os.path.exists(output_subfolder) and check_stems_exist(output_subfolder, options['separate_drums']):
             print(f'Skipping already processed file: {input_audio}')
             continue
             
@@ -1269,58 +1217,32 @@ def predict_with_model(options):
         print("Input audio: {} Sample rate: {}".format(audio.shape, sr))
         result, sample_rates = model.separate_music_file(audio.T, sr, i, len(options['input_audio']))
 
-        # Attempt to write kick and hihat, track success
-        has_both_drum_stems = True
-        for stem in ['kick', 'hihat']:
-            if stem in result:
-                output_name = f"{stem}.{output_extension}"
-                if options["restore_gain"]:
-                    result[stem] = dBgain(result[stem], -options['input_gain'])
-                # Ensure data is float32 and within valid range
-                result[stem] = np.clip(result[stem], -1.0, 1.0).astype(np.float32)
-                
-                print(f"Writing {stem}.{output_extension} with shape {result[stem].shape} and dtype {result[stem].dtype}")
-                
-                # Transpose the data to (samples, channels) before writing
-                try:
-                    sf.write(os.path.join(output_subfolder, output_name), result[stem].T, sr, subtype=output_format)
-                    print('File created: {}'.format(os.path.join(output_subfolder, output_name)))
-                except Exception as e:
-                    print(f"Error writing {stem} stem to {os.path.join(output_subfolder, output_name)}: {e}")
-            else:
-                has_both_drum_stems = False
+        # Write all generated stems
+        stems_to_write = [stem for stem in result.keys() if stem != 'instrum']
 
-        # Decide which stems to write next, based on drum separation success
-        stems_to_write = ['bass', 'vocals', 'other']
-        if not has_both_drum_stems:
-            stems_to_write.append('drums')
-            
-        # Write remaining stems with error handling (this section needs to be corrected!)
-        for instrum in stems_to_write:
-            if instrum in result:  # Only write stems that exist in result
-                try:
-                    output_name = f"{instrum}.{output_extension}"
-                    output_path = os.path.join(output_subfolder, output_name)
-                    
-                    # Ensure the parent directory exists
-                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                    
-                    if options["restore_gain"]:
-                        result[instrum] = dBgain(result[instrum], -options['input_gain'])
-                    
-                    # Ensure data is float32 and within valid range
-                    result[instrum] = np.clip(result[instrum], -1.0, 1.0).astype(np.float32)
-                    
-                    # Transpose the data to (samples, channels) before writing
-                    try:
-                        sf.write(output_path, result[instrum].T, sr, subtype=output_format)
-                        # print('File created: {}'.format(output_path))
-                    except Exception as e:
-                        print(f"Error writing {instrum} stem to {output_path}: {e}")
-                        continue
-                except Exception as e:
-                    print(f"Error writing {instrum} stem to {output_path}: {e}")
-                    continue
+        for stem in stems_to_write:
+            try:
+                output_name = f"{stem}.{output_extension}"
+                output_path = os.path.join(output_subfolder, output_name)
+                
+                # Ensure the parent directory exists
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                
+                stem_audio = result[stem]
+                
+                if options["restore_gain"]:
+                    stem_audio = dBgain(stem_audio, -options['input_gain'])
+                
+                # Ensure data is float32 and within valid range
+                stem_audio = np.clip(stem_audio, -1.0, 1.0).astype(np.float32)
+                
+                # Write the audio file (shape should be samples, channels)
+                sf.write(output_path, stem_audio, sr, subtype=output_format)
+                print('File created: {}'.format(output_path))
+
+            except Exception as e:
+                print(f"Error writing {stem} stem to {output_path}: {e}")
+                continue
 
 
 # Linkwitz-Riley filter
@@ -1387,6 +1309,7 @@ if __name__ == '__main__':
     m.add_argument("--shifts_drum", type=int, help="Number of shifts to use in custom drum separation (higher values can improve quality at the cost of processing time)", default=1)
     m.add_argument("--instrumental_version", action='store_true', help="Generate the instrumental version (combined bass+drums+other)", default=True)
     m.add_argument("--filter_vocals", action='store_true', help="Remove audio below 50hz in vocals stem")
+    m.add_argument("--separate_drums", action='store_true', help="If enabled, separates the drums stem into kick, clap, hihat, and toms.")
     options = m.parse_args().__dict__
     print("Options: ")
     print(f'large_gpu: {options["large_gpu"]}\n')
