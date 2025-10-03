@@ -14,6 +14,9 @@ if __name__ == '__main__':
     import argparse
     from time import time
 
+    # Check for Colab flag before doing anything else
+    is_colab = '--is_colab' in sys.argv
+
     # Create NVIDIA library directories
     nvidia_dirs = ['/usr/local/nvidia/lib', '/usr/local/nvidia/lib64', '/usr/lib64-nvidia']
     for dir_path in nvidia_dirs:
@@ -81,8 +84,11 @@ if __name__ == '__main__':
         pass
 
     finally:
-        # Change back to the original working directory
-        os.chdir('/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2')
+        # Change back to the correct working directory based on the environment
+        if is_colab:
+            os.chdir('/content/MVSEP-MDX23-Colab_v2')
+        else:
+            os.chdir('/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2')
 
     # === Update LD_LIBRARY_PATH ===
     import site
@@ -1061,7 +1067,7 @@ class EnsembleDemucsMDXMusicSeparationModel:
                     # ----------Model 8: custom_drum_model---------
                     drums_audio = torch.from_numpy(separated_music_arrays["drums"].T).type(torch.FloatTensor).to(self.device).unsqueeze(0)
 
-                    custom_model_path = Path("/workspace/Demucs_MDX25_drumsep/MVSEP-MDX23-Colab_v2/models/demucs-drums-fixed.th")
+                    custom_model_path = Path("/content/MVSEP-MDX23-Colab_v2/models/demucs-drums-fixed.th")
                     custom_drum_model, _, _, _ = load_custom_model(custom_model_path)
                     custom_drum_model.to(self.device)
                     custom_drum_model.eval()
@@ -1310,6 +1316,7 @@ if __name__ == '__main__':
     m.add_argument("--instrumental_version", action='store_true', help="Generate the instrumental version (combined bass+drums+other)", default=True)
     m.add_argument("--filter_vocals", action='store_true', help="Remove audio below 50hz in vocals stem")
     m.add_argument("--separate_drums", action='store_true', help="If enabled, separates the drums stem into kick, clap, hihat, and toms.")
+    m.add_argument("--is_colab", action='store_true', help="Flag to indicate the script is running in a Google Colab environment.")
     options = m.parse_args().__dict__
     print("Options: ")
     print(f'large_gpu: {options["large_gpu"]}\n')
